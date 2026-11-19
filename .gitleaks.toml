@@ -1,0 +1,11 @@
+# gitleaks 설정: 기본 규칙 + 미끼 템플릿 자리표시자 허용
+# 실제 미끼 키(backup-legacy, T7)는 실제 IAM 사용자의 실제 키 → 절대 커밋 금지, 배포 시 주입
+[extend]
+useDefault = true
+
+[allowlist]
+description = "미끼 템플릿 자리표시자({{ ... }})와 AWS 문서 예시 키"
+regexes = [
+  '''\{\{\s*[A-Za-z0-9_.]+\s*\}\}''',
+  '''AKIAIOSFODNN7EXAMPLE''',
+]

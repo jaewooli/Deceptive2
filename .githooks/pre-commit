@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# 커밋 전 비밀값 검사. gitleaks가 없으면 커밋을 막는다(fail-closed).
+# 연결: git config core.hooksPath .githooks
+set -euo pipefail
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "[pre-commit] gitleaks가 없습니다. 설치 후 다시 커밋하세요 (README '처음 클론했을 때')." >&2
+  exit 1
+fi
+exec gitleaks git --pre-commit --staged --redact --no-banner --config "$(git rev-parse --show-toplevel)/.gitleaks.toml"

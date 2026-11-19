@@ -1,0 +1,45 @@
+# --- 비밀값: 실제 값은 저장소에 넣지 않고 배포 시 주입 (CLAUDE.md) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*_key
+*_key.pub
+credentials
+credentials.*
+*.secret
+secrets/
+webhook*.url
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+instance/
+
+# --- IaC 상태 파일(계정 ID·리소스 ID 포함) ---
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# --- 측정·포렌식 결과물(실제 호스트 데이터, 필요한 것만 docs/에 요약) ---
+out/
+*.log
+
+# --- 기타 ---
+.DS_Store
+.idea/
+.vscode/
+
+# 미끼 템플릿은 커밋한다(값은 {{ 자리표시자 }}, gitleaks가 내용 검사)
+!*.j2
+!*.tmpl
+
+CLAUDE.md
