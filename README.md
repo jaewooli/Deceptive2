@@ -8,24 +8,24 @@
 
 ## 폴더
 
-서버에 올라가는 것 = `base/` + `hosts/` + `webapp/` + `baits/` (+ `detection/`의 호스트 쪽 규칙). 나머지는 AWS·로컬에서 실행하는 코드이거나 문서·저장소 설정이다.
+**서버에 올라가는 것은 전부 `servers/` 안에 있다.** 그 밖의 폴더는 AWS·로컬에서 실행하는 코드이거나 문서·저장소 설정이다.
 
 | 폴더 | 내용 | 일정 |
 |---|---|---|
-| `infra/` | VPC·보안 그룹·인스턴스·CloudTrail | 11/21~22 |
-| `base/` | 세 서버 공통 베이스(auditd 규칙, CloudWatch 에이전트) — 한 벌만(변경 A) | 11/21~22 |
-| `hosts/` | 호스트별 역할 구성(app-01, db-backup-01). 공통은 `base/` | 11/21~22, 11/25, 11/27 |
-| `webapp/` | 모아예약 웹 앱 → web-01 `/srv/app` | 11/21 |
-| `baits/` | 미끼 정의 T1~T7 (템플릿만, 값은 배포 시 주입) | 11/26~27 |
-| `validation/` | 진정성 검증 세트 | 11/23~25 |
+| `servers/base/` | 세 서버 공통 베이스(auditd 규칙, CloudWatch 에이전트) — 한 벌만(변경 A) | 11/21~22 |
+| `servers/hosts/` | 호스트별 역할 구성(app-01, db-backup-01). 공통은 `servers/base/` | 11/21~22, 11/25, 11/27 |
+| `servers/webapp/` | 모아예약 웹 앱 + web-01 역할(nginx·systemd) → web-01 `/srv/app` | 11/21 |
+| `servers/baits/` | 미끼 정의 T1~T7 (템플릿만, 값은 배포 시 주입) | 11/26~27 |
+| `infra/` | VPC·보안 그룹·인스턴스·CloudTrail (AWS API) | 11/21~22 |
+| `validation/` | 진정성 검증 세트 (서버에 대고 실행, 설치 안 함) | 11/23~25 |
 | `detection/` | 탐지 룰·억제 규칙·경보·상관분석 | 11/27~12/1 |
-| `forensics/` | 출발지 포렌식 스냅샷 | 11/29 |
+| `forensics/` | 출발지 포렌식 스냅샷 (SSM으로 실행) | 11/29 |
 | `scenarios/` | 시나리오 1~3, 기준선 정상 작업 | 11/29~12/2 |
 
-### `webapp/` 주의
+### `servers/webapp/` 주의
 - 이 폴더는 **가상 회사의 코드**로서 서버에 그대로 올라간다. 이 프로젝트의 용어(미끼·함정·디코이·탐지 등)를 파일·주석에 쓰지 않는다
 - 배포는 파일만 복사하고 이 저장소의 `.git`은 올리지 않는다. `/srv/app`의 커밋 이력은 회사 서사에 맞춰 따로 만든다(이 저장소 이력이 올라가면 그 자체가 구별 단서)
-- `moayeyak/receipt.py`의 `build_receipt_pdf()`(예약 확인서 PDF, 의도적 취약점)는 직접 작성한다
+- `servers/webapp/moayeyak/receipt.py`의 `build_receipt_pdf()`(예약 확인서 PDF, 의도적 취약점)는 직접 작성한다
 - 로컬 확인: `DATABASE_URL=sqlite:///…`로 실행 가능(월간 리포트는 PostgreSQL 전용, 꺼짐 상태)
 
 ## 비밀값
