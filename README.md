@@ -16,9 +16,10 @@
 | `servers/hosts/` | 호스트별 역할 구성(app-01, db-backup-01). 공통은 `servers/base/` | 11/21~22, 11/25, 11/27 |
 | `servers/webapp/` | 모아예약 웹 앱 + web-01 역할(nginx·systemd) → web-01 `/srv/app` | 11/21 |
 | `servers/baits/` | 미끼 정의 T1~T7 (템플릿만, 값은 배포 시 주입) | 11/26~27 |
+| `servers/detection/` | 호스트 쪽 탐지 룰(auditd 감시, sshd·DB 접속 감시, 경보 스크립트) | 11/26~29 |
 | `infra/` | VPC·보안 그룹·인스턴스·CloudTrail (AWS API) | 11/21~22 |
 | `validation/` | 진정성 검증 세트 (서버에 대고 실행, 설치 안 함) | 11/23~25 |
-| `detection/` | 탐지 룰·억제 규칙·경보·상관분석 | 11/27~12/1 |
+| `detection/` | AWS 쪽 탐지 룰(CloudTrail→EventBridge→Lambda), 상관분석, 억제 규칙. T6은 `servers/detection/`과 걸침 | 11/27~12/1 |
 | `forensics/` | 출발지 포렌식 스냅샷 (SSM으로 실행) | 11/29 |
 | `scenarios/` | 시나리오 1~3, 기준선 정상 작업 | 11/29~12/2 |
 

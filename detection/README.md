@@ -1,8 +1,12 @@
-# detection — 탐지 룰 · 억제 규칙 · 경보 · 상관분석
+# detection — AWS 쪽 탐지 룰 · 경보 처리 (서버 밖)
 
-- 결과 기반 감시 P0(`authorized_keys`, `/etc/ld.so.preload`, `/etc/cron.d`) — 11/28
-- 디코이 로그인·미끼 DB 계정 접속 경보, 웹훅, 침투 체인 상관분석, 세션 명령 첨부 — 11/29
-- CloudTrail → EventBridge → Lambda → 웹훅(AWS 키 2차 탐지) — 11/27
+호스트에 설치되는 룰은 `servers/detection/`에 있다.
+
+- CloudTrail(단일 리전) → EventBridge → Lambda → 웹훅: `backup-legacy` 키(T6 2차), 실험 키(T7) — 11/27. 읽기 전용 호출 전달 여부 먼저 확인, 안 되면 CloudWatch Logs 지표 필터
+- 침투 체인 상관분석(미끼 고유 ID → 미끼 위치 호스트 → 출발 내부 IP → 계정 → 이후 행동) — 11/29
 - 억제 규칙 — 12/1 (기준선 오탐 원인 분석 후)
-- 근거: `docs/plan-wbs.md` 3절 기능 2·3·4, 5절 성공 기준
-- 웹훅 URL은 커밋 금지(배포 시 주입). 수정 시 시나리오 재실행(회귀 테스트)
+- 근거: `docs/plan-wbs.md` 3절 기능 2·4, 5절 성공 기준
+- 웹훅 URL은 커밋 금지(배포 시 주입)
+
+## 회귀 테스트
+**두 곳에 걸친 미끼: T6**(CloudTrail 2차 여기 / 호스트 1차 `servers/detection/`). 어느 쪽을 고쳐도 시나리오 재실행.
