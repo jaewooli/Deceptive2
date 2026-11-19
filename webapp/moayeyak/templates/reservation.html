@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}예약 확인 · 모아예약{% endblock %}
+{% block content %}
+<h1>예약이 완료되었습니다</h1>
+<dl class="summary">
+  <dt>예약 번호</dt><dd>{{ r.code }}</dd>
+  <dt>매장</dt><dd>{{ r.store.name }}</dd>
+  <dt>일시</dt><dd>{{ r.reserved_at.strftime('%Y-%m-%d %H:%M') }}</dd>
+  <dt>예약자</dt><dd>{{ r.customer_name }} ({{ r.party_size }}명)</dd>
+</dl>
+<a class="btn" href="{{ url_for('public.receipt', code=r.code) }}">예약 확인서 PDF 받기</a>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}매장 찾기 · 모아예약{% endblock %}
+{% block content %}
+<h1>매장 찾기</h1>
+<ul class="cards">
+  {% for s in stores %}
+  <li>
+    <strong>{{ s.name }}</strong> <span class="tag">{{ s.category }}</span>
+    <p>{{ s.address }} · {{ s.phone }}</p>
+    <a class="btn" href="{{ url_for('public.reserve', store_id=s.id) }}">예약하기</a>
+  </li>
+  {% else %}
+  <li>등록된 매장이 없습니다.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

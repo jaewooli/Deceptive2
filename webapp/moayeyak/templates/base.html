@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}모아예약{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="{{ url_for('public.index') }}">모아예약</a>
+    <nav>
+      <a href="{{ url_for('public.stores') }}">매장 찾기</a>
+      <a href="{{ url_for('admin.login') }}">사장님 로그인</a>
+    </nav>
+  </header>
+  <main>
+    {% with messages = get_flashed_messages() %}
+      {% for m in messages %}<p class="flash">{{ m }}</p>{% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer>© 모아예약 · 이 사이트는 실존하지 않는 가상의 회사입니다.</footer>
+</body>
+</html>

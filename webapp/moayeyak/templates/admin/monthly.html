@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}월간 리포트 · 모아예약{% endblock %}
+{% block content %}
+<h1>월간 매장 리포트</h1>
+<table>
+  <thead><tr><th>월</th><th>매장</th><th>예약 수</th></tr></thead>
+  <tbody>
+  {% for name, month, cnt in rows %}
+    <tr><td>{{ month.strftime('%Y-%m') }}</td><td>{{ name }}</td><td>{{ cnt }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
