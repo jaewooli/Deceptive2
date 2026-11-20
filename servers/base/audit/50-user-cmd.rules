@@ -1,0 +1,5 @@
+## 로그인 세션에서 실행한 명령 기록
+## 서비스 프로세스(systemd가 띄운 것)는 auid가 없으므로 남지 않는다.
+## 시스템 계정(uid < 1000)으로 로그인한 세션도 남기기 위해 auid>=1000 조건은 두지 않는다.
+-a always,exit -F arch=b64 -S execve -F auid!=unset -F key=user-cmd
+-a always,exit -F arch=b32 -S execve -F auid!=unset -F key=user-cmd
