@@ -206,6 +206,13 @@ def v_nginx(stage):
     return t
 
 
+def v_install(stage):
+    t = F("deploy/install.sh")
+    if stage < 6:
+        t = drop_block(t, "# 예약 확인서 PDF")
+    return t
+
+
 def v_readme(stage):
     t = F("README.md")
     if stage < 6:
@@ -248,7 +255,8 @@ def stages():
     })
     add(3, "2024-03-14T21:47:05", A, "배포 설정: gunicorn + nginx + systemd", {
         "deploy/moayeyak.service": F("deploy/moayeyak.service"),
-        "deploy/nginx-moayeyak.conf": v_nginx(3), "README.md": v_readme(3),
+        "deploy/nginx-moayeyak.conf": v_nginx(3), "deploy/install.sh": v_install(3),
+        "README.md": v_readme(3),
     })
     add(4, "2024-03-20T11:26:58", A, "사장님 로그인과 예약 목록", {
         "moayeyak/models.py": v_models(4), "moayeyak/__init__.py": v_init(4),
@@ -263,7 +271,7 @@ def stages():
     add(6, "2024-05-13T16:44:12", A, "예약 확인서 PDF 다운로드", {
         "moayeyak/receipt.py": F("moayeyak/receipt.py"),
         "moayeyak/templates/receipt.html": F("moayeyak/templates/receipt.html"),
-        "README.md": v_readme(6),
+        "README.md": v_readme(6), "deploy/install.sh": v_install(6),
         "moayeyak/views/public.py": v_public(6), "moayeyak/config.py": v_config(6),
         "moayeyak/templates/reservation.html": v_reservation_html(6), ".env.example": v_env(6),
     })

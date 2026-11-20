@@ -17,6 +17,7 @@ set -a; . ./.env; set +a      # .env.example 참고
 
 ## 배포 (web-01)
 
+- 패키지: `sudo bash deploy/install.sh`
 - 코드: `/srv/app` (`deploy` 계정)
 - 설정: `/srv/app/.env` → `deploy/moayeyak.service`의 EnvironmentFile
 - nginx: `deploy/nginx-moayeyak.conf` → `/etc/nginx/sites-available/moayeyak`
