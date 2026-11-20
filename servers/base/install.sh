@@ -24,8 +24,9 @@ base() {
   install -m 0640 audit/50-user-cmd.rules /etc/audit/rules.d/50-user-cmd.rules
   # 패키지 기본 audit.rules는 10-base-config와 같은 내용이고, 이름순으로 맨 뒤에 읽혀 -D로 앞 규칙을 지운다
   rm -f /etc/audit/rules.d/audit.rules
-  augenrules --load
   systemctl enable --now auditd
+  augenrules --load
+  audit/check.sh
 
   systemctl enable --now unattended-upgrades cron logrotate.timer
   systemctl enable --now clamav-freshclam || true
