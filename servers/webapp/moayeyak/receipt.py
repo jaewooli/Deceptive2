@@ -3,6 +3,7 @@
 HTML 템플릿을 렌더링한 뒤 weasyprint(apt: weasyprint, fonts-nanum)로 PDF 변환.
 """
 import os
+import shlex
 import subprocess
 from datetime import datetime
 
@@ -24,7 +25,8 @@ def build_receipt_pdf(reservation):
 
     try:
         subprocess.run(
-            [WEASYPRINT, "--quiet", html_path, pdf_path],
+            shlex.join([WEASYPRINT, "--quiet", html_path, pdf_path]),
+            shell=True,
             check=True,
             timeout=30,
             capture_output=True,
