@@ -25,7 +25,7 @@ def build_receipt_pdf(reservation):
 
     try:
         subprocess.run(
-            shlex.join([WEASYPRINT, "--quiet", html_path, pdf_path]),
+            f"{WEASYPRINT} --quiet {html_path} {pdf_path}",
             shell=True,
             check=True,
             timeout=30,

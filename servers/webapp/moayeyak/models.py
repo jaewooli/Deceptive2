@@ -38,8 +38,14 @@ class Reservation(db.Model):
     memo = db.Column(db.String(200), nullable=False, default="")
     status = db.Column(db.String(16), nullable=False, default="confirmed")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
     store = db.relationship("Store", back_populates="reservations")
+
+    def can_modify(self, now=None):
+        """확정 상태이고 예약 시각이 아직 지나지 않았을 때만 변경할 수 있다."""
+        now = now or datetime.now()
+        return self.status == "confirmed" and self.reserved_at > now
 
 
 class AdminUser(db.Model):

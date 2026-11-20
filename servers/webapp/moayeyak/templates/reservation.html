@@ -9,4 +9,7 @@
   <dt>예약자</dt><dd>{{ r.customer_name }} ({{ r.party_size }}명)</dd>
 </dl>
 <a class="btn" href="{{ url_for('public.receipt', code=r.code) }}">예약 확인서 PDF 받기</a>
+{% if r.can_modify() %}
+<a class="btn" href="{{ url_for('public.reservation_edit', code=r.code) }}">예약 변경</a>
+{% endif %}
 {% endblock %}
