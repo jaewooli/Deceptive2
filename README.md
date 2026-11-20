@@ -15,6 +15,7 @@
 | `servers/base/` | 세 서버 공통 베이스(auditd 규칙, CloudWatch 에이전트) — 한 벌만(변경 A) | 11/21~22 |
 | `servers/hosts/` | 호스트별 역할 구성(app-01, db-backup-01). 공통은 `servers/base/` | 11/21~22, 11/25, 11/27 |
 | `servers/webapp/` | 모아예약 웹 앱 + web-01 역할(nginx·systemd) → web-01 `/srv/app` | 11/21 |
+| `servers/webapp-history/` | `/srv/app` 서사용 커밋 이력 생성 도구 — **도구는 올리지 않고 결과 디렉터리만** | 11/20(도구), 11/21 배포 |
 | `servers/baits/` | 미끼 정의 T1~T7 (템플릿만, 값은 배포 시 주입) | 11/26~27 |
 | `servers/detection/` | 호스트 쪽 탐지 룰(auditd 감시, sshd·DB 접속 감시, 경보 스크립트) | 11/26~29 |
 | `infra/` | VPC·보안 그룹·인스턴스·CloudTrail (AWS API) | 11/21~22 |
