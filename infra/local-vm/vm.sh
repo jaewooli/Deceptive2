@@ -90,9 +90,12 @@ wait_ssh() {
 stop_seed() { [ -f "$DIR/seed-http.pid" ] && kill "$(cat "$DIR/seed-http.pid")" 2>/dev/null; rm -f "$DIR/seed-http.pid"; }
 
 down() {
+  local pid=""
+  [ -f "$DIR/$NAME.pid" ] && pid=$(cat "$DIR/$NAME.pid")
   ssh "${ssh_opts[@]}" ubuntu@127.0.0.1 'sudo poweroff' 2>/dev/null || true
-  sleep 3
-  [ -f "$DIR/$NAME.pid" ] && kill "$(cat "$DIR/$NAME.pid")" 2>/dev/null || true
+  # TCG에서는 종료가 느리다: 최대 60초 기다린 뒤 강제 종료
+  for _ in $(seq 1 60); do { [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; } && break; sleep 1; done
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   rm -f "$DIR/$NAME.pid"; stop_seed
 }
 
