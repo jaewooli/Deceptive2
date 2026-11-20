@@ -128,6 +128,9 @@ def v_env(stage):
 
 def v_models(stage):
     t = F("moayeyak/models.py")
+    if stage < 14:  # 예약 변경 기능 전 — updated_at·can_modify 없음
+        t = sub(t, "    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)\n", "")
+        t = drop_block(t, "\n\n    def can_modify(self, now=None):", "\n\n\nclass AdminUser")
     if stage < 4:
         t = drop_block(t, "\n\nclass AdminUser")
         t = sub(t, "from werkzeug.security import check_password_hash, generate_password_hash\n", "")
@@ -143,6 +146,8 @@ def v_models(stage):
 
 def v_public(stage):
     t = F("moayeyak/views/public.py")
+    if stage < 14:  # 예약 변경 라우트 전
+        t = drop_block(t, '\n\n\n@bp.route("/reservations/<code>/edit", methods=["GET", "POST"])', '\n\n\n@bp.get("/reservations/<code>/receipt.pdf")')
     if stage < 6:
         t = drop_block(t, '\n\n@bp.get("/reservations/<code>/receipt.pdf")')
         t = t.rstrip("\n") + "\n"
@@ -194,6 +199,8 @@ def v_stores_html(stage):
 
 def v_reservation_html(stage):
     t = F("moayeyak/templates/reservation.html")
+    if stage < 14:  # 예약 변경 링크 전
+        t = sub(t, '{% if r.can_modify() %}\n<a class="btn" href="{{ url_for(\'public.reservation_edit\', code=r.code) }}">예약 변경</a>\n{% endif %}\n', "")
     if stage < 6:
         t = sub(t, "<a class=\"btn\" href=\"{{ url_for('public.receipt', code=r.code) }}\">예약 확인서 PDF 받기</a>\n", "")
     return t
@@ -295,10 +302,15 @@ def stages():
         "moayeyak/__init__.py": v_init(13), "moayeyak/config.py": v_config(13),
         "moayeyak/reports.py": v_reports(13), ".env.example": v_env(13),
     })
-    add(14, "2025-12-08T14:02:55", B, "의존성 업데이트", {"requirements.txt": requirements_at("2025-12-08")})
+    add(14, "2025-10-21T14:30:00", B, "예약 변경 기능 (날짜·시간·인원·메모·예약번호)", {
+        "moayeyak/models.py": v_models(14), "moayeyak/views/public.py": v_public(14),
+        "moayeyak/templates/reservation.html": v_reservation_html(14),
+        "moayeyak/templates/reservation_edit.html": F("moayeyak/templates/reservation_edit.html"),
+    })
+    add(15, "2025-12-08T14:02:55", B, "의존성 업데이트", {"requirements.txt": requirements_at("2025-12-08")})
     last_dep = "2026-11-18"
     check_final_requirements(last_dep)
-    add(15, f"{last_dep}T16:39:40", B, "의존성 업데이트", {"requirements.txt": F("requirements.txt")})
+    add(16, f"{last_dep}T16:39:40", B, "의존성 업데이트", {"requirements.txt": F("requirements.txt")})
     return S
 
 
