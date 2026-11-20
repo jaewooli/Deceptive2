@@ -43,3 +43,7 @@ out/
 !*.tmpl
 
 CLAUDE.md
+
+# --- Terraform 변수(내 공인 IP 등 개인정보) ---
+*.tfvars
+!*.tfvars.example
