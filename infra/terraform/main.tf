@@ -7,6 +7,11 @@ provider "aws" {
   }
 }
 
+# Ubuntu 24.04 LTS(amd64, gp3) AMI — Canonical 공개 SSM 파라미터로 리전 자동 매칭
+data "aws_ssm_parameter" "ubuntu_2404" {
+  name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
+}
+
 # 네트워크: VPC·서브넷 2개·IGW·라우트·S3 게이트웨이 엔드포인트
 module "network" {
   source = "./modules/network"
@@ -18,5 +23,61 @@ module "network" {
   availability_zone    = var.availability_zone
 }
 
-# 다음 단계(오늘 계속): modules/ssm-role, modules/security, modules/host ×3
-# 11/27 이후: modules/storage(S3 버킷), modules/iam-backup, modules/cloudtrail
+# 세 서버 공통 SSM/CloudWatch 인스턴스 프로파일
+module "ssm_role" {
+  source  = "./modules/ssm-role"
+  project = var.project
+}
+
+# 보안 그룹 3개
+module "security" {
+  source = "./modules/security"
+
+  project  = var.project
+  vpc_id   = module.network.vpc_id
+  vpc_cidr = module.network.vpc_cidr
+  admin_ip = var.admin_ip
+}
+
+# ---------------------------------------------------------------- 호스트 3대
+# web-01 — 모아예약 웹(public, 의도적 취약점 → 초기 침투 지점)
+module "web_01" {
+  source = "./modules/host"
+
+  project              = var.project
+  name                 = "web-01"
+  ami_id               = data.aws_ssm_parameter.ubuntu_2404.value
+  instance_type        = "t3.micro"
+  subnet_id            = module.network.public_subnet_id
+  security_group_id    = module.security.web_sg_id
+  iam_instance_profile = module.ssm_role.instance_profile_name
+}
+
+# app-01 — 운영 PostgreSQL + S3 백업(internal)
+module "app_01" {
+  source = "./modules/host"
+
+  project              = var.project
+  name                 = "app-01"
+  ami_id               = data.aws_ssm_parameter.ubuntu_2404.value
+  instance_type        = "t3.micro"
+  subnet_id            = module.network.internal_subnet_id
+  security_group_id    = module.security.app_sg_id
+  iam_instance_profile = module.ssm_role.instance_profile_name
+}
+
+# db-backup-01 — 디코이(internal, 단일 호스트 다중 주소: 보조 사설 IP 3개)
+module "db_backup_01" {
+  source = "./modules/host"
+
+  project              = var.project
+  name                 = "db-backup-01"
+  ami_id               = data.aws_ssm_parameter.ubuntu_2404.value
+  instance_type        = "t3.small"
+  subnet_id            = module.network.internal_subnet_id
+  security_group_id    = module.security.decoy_sg_id
+  iam_instance_profile = module.ssm_role.instance_profile_name
+  secondary_ip_count   = 3
+}
+
+# 11/27 이후: modules/storage(S3 버킷), modules/iam-backup(backup-writer·backup-legacy), modules/cloudtrail
