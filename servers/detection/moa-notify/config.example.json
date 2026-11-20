@@ -1,0 +1,14 @@
+{
+  "webhook_url": "{{ webhook_url }}",
+  "format": "discord",
+  "max_per_minute": 30,
+  "poll_seconds": 0.5,
+  "state_file": "/var/lib/moa-notify/state.json",
+  "watch": {
+    "postgresql": {
+      "enabled": false,
+      "path": "/var/log/postgresql/postgresql-16-main.log",
+      "settle_seconds": 3
+    }
+  }
+}

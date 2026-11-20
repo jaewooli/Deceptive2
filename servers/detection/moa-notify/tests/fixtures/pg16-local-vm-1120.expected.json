@@ -1,0 +1,46 @@
+[
+ {
+  "user": "postgres",
+  "result": "접속 성공"
+ },
+ {
+  "user": "postgres",
+  "result": "접속 성공"
+ },
+ {
+  "user": "postgres",
+  "result": "접속 성공"
+ },
+ {
+  "user": "postgres",
+  "result": "접속 성공"
+ },
+ {
+  "user": "report_ro",
+  "result": "비밀번호 인증 실패"
+ },
+ {
+  "user": "report_ro",
+  "result": "비밀번호 인증 실패"
+ },
+ {
+  "user": "postgres",
+  "result": "접속 성공"
+ },
+ {
+  "user": null,
+  "result": "SSL 협상 후 끊김"
+ },
+ {
+  "user": null,
+  "result": "결과 기록 없음"
+ },
+ {
+  "user": null,
+  "result": "결과 기록 없음"
+ },
+ {
+  "user": null,
+  "result": "결과 기록 없음"
+ }
+]
