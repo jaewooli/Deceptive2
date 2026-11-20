@@ -208,6 +208,8 @@ def v_nginx(stage):
 
 def v_readme(stage):
     t = F("README.md")
+    if stage < 6:
+        t = sub(t, "예약 확인서 PDF: `sudo apt install weasyprint fonts-nanum`\n\n", "")
     if stage < 4:
         t = sub(t, ".venv/bin/flask --app wsgi create-admin <id>\n", "")
     if stage < 3:
@@ -260,6 +262,8 @@ def stages():
     })
     add(6, "2024-05-13T16:44:12", A, "예약 확인서 PDF 다운로드", {
         "moayeyak/receipt.py": F("moayeyak/receipt.py"),
+        "moayeyak/templates/receipt.html": F("moayeyak/templates/receipt.html"),
+        "README.md": v_readme(6),
         "moayeyak/views/public.py": v_public(6), "moayeyak/config.py": v_config(6),
         "moayeyak/templates/reservation.html": v_reservation_html(6), ".env.example": v_env(6),
     })

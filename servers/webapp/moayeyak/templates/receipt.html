@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>예약 확인서 {{ r.code }}</title>
+  <style>
+    @page { size: A4; margin: 24mm 20mm; }
+    body { font-family: "NanumGothic", sans-serif; color: #1f2328; font-size: 11pt; }
+    h1 { font-size: 20pt; margin: 0 0 4mm; }
+    .brand { color: #2f6f4f; font-weight: bold; font-size: 13pt; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8mm; }
+    th, td { text-align: left; padding: 3mm 2mm; border-bottom: 0.3mm solid #d0d7de; }
+    th { width: 32mm; color: #636c76; font-weight: normal; }
+    .code { font-size: 16pt; letter-spacing: 1mm; }
+    footer { position: fixed; bottom: 0; font-size: 8.5pt; color: #636c76; }
+  </style>
+</head>
+<body>
+  <div class="brand">모아예약</div>
+  <h1>예약 확인서</h1>
+  <table>
+    <tr><th>예약 번호</th><td class="code">{{ r.code }}</td></tr>
+    <tr><th>매장</th><td>{{ r.store.name }} ({{ r.store.category }})</td></tr>
+    <tr><th>주소</th><td>{{ r.store.address }}</td></tr>
+    <tr><th>매장 연락처</th><td>{{ r.store.phone }}</td></tr>
+    <tr><th>예약 일시</th><td>{{ r.reserved_at.strftime('%Y-%m-%d %H:%M') }}</td></tr>
+    <tr><th>예약자</th><td>{{ r.customer_name }} · {{ r.party_size }}명</td></tr>
+    {% if r.memo %}<tr><th>요청 사항</th><td>{{ r.memo }}</td></tr>{% endif %}
+  </table>
+  <footer>발급 {{ issued_at.strftime('%Y-%m-%d %H:%M') }} · 예약 변경·취소는 매장으로 연락해 주세요. · 이 문서는 실존하지 않는 가상의 회사가 발급했습니다.</footer>
+</body>
+</html>

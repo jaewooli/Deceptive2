@@ -4,6 +4,8 @@
 
 ## 실행
 
+예약 확인서 PDF: `sudo apt install weasyprint fonts-nanum`
+
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
