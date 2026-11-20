@@ -60,7 +60,7 @@ AWS에 가상 회사 인프라를 만들고, 상용 디셉션 제품의 핵심 �
    - **배포 채널(변경 C)**: 모든 미끼는 손으로 심지 않고 **SSM(Run Command/State Manager) 또는 Ansible**로 배포·교체·회수. 미끼 정의(위치, 내용 템플릿, 고유 ID, 가리키는 목적지)는 Git의 코드로 관리 ↔ Illusive의 원격 맞춤 배포, Zscaler·S1의 기존 에이전트 재사용
    - 파일 미끼: `.env`, `~/.ssh/config`, `~/.bash_history` → db-backup-01
    - 자격증명 저장소·메모리 미끼 ↔ Illusive·ThreatStrike·S1 Identity의 자격증명 저장소 미끼를 Linux로: `ssh-agent`에 미끼 키, 실행 중 프로세스 환경변수·인자에 미끼 DB 접속 정보(`ps`로 보임). (`~/.git-credentials`는 11/19 제외 — git 서버가 없어 사용 시점 탐지 목적지 없음)
-   - **메모리 미끼 탐지 방식(확정)**: `/proc` 열람이나 `ps` 실행은 감시하지 않음(정상 관리 작업에서 오탐 폭주). 대신 **미끼 DB 계정으로 접속을 시도하는 순간**을 잡는다(목적지 탐지, Illusive 트랩 서버와 같은 원칙) → db-backup-01에 경량 더미 DB 리스너(Python 소켓, PostgreSQL 5432). 접속 시작 메시지에서 사용자명을 읽어 미끼 계정이면 경보. 미끼 키도 같은 원칙(사용 시점 탐지) — (미결정: 진짜 PostgreSQL + `log_connections`로 교체, `02-infra-design.md` 2절)
+   - **메모리 미끼 탐지 방식(확정)**: `/proc` 열람이나 `ps` 실행은 감시하지 않음(정상 관리 작업에서 오탐 폭주). 대신 **미끼 DB 계정으로 접속을 시도하는 순간**을 잡는다(목적지 탐지, Illusive 트랩 서버와 같은 원칙) → db-backup-01에 경량 더미 DB 리스너(Python 소켓, PostgreSQL 5432). 접속 시작 메시지에서 사용자명을 읽어 미끼 계정이면 경보. 미끼 키도 같은 원칙(사용 시점 탐지) — (**11/20 결정: 진짜 PostgreSQL 16 + `log_connections`로 교체**, 리스너 대신 PG 서버 로그에서 사용자명을 읽음, `02-infra-design.md` 2절)
    - **AWS 키 서사(확정, AWS 단일 환경)**: app-01은 IAM 역할 `backup-writer`로 매일 S3 백업(실제 동작, IMDSv2 인증, 키 파일 없음)
      - 미끼 = 역할로 전환하기 전에 쓰던 **장기 액세스 키**가 `~/.aws/credentials`의 `[backup-legacy]` 프로필로 남아 있음(IAM 사용자 `backup-legacy`, 권한 없음). 공격자가 쓰면 AccessDenied
      - 흔적: 키 방식 이전 백업 스크립트(주석 처리), 전환 시점 히스토리·변경 메모 — 11/27 중 1시간 상한

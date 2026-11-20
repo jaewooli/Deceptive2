@@ -2,7 +2,8 @@
 
 - 진짜 OpenSSH, IP별 sshd 인스턴스(보조 사설 IP 최대 3개, 포트·배너 분리 — 상한 3시간)
 - rsync 수신 설정(중단된 상태), `backup` 계정, `/backup/dumps` 옛 덤프(S3 전환 시점까지)
-- 복원 검증용 DB 5432 — **미결정**: Python 더미 리스너 vs 진짜 PostgreSQL + `log_connections` (11/22 전 결정)
+- 복원 검증용 DB 5432 — **진짜 PostgreSQL 16**(11/20 결정). 미끼 계정(`report_ro`·`sync_svc`)은 만들지 않아 로그인 실패. 접속 기록은 공통 PG 로그 설정(`../../base/postgresql/`)으로 남기고 `moa-notify`가 읽음(`../../detection/moa-notify/`)
+- `postgresql/`: 이 호스트의 역할 설정(내부망 수신, `pg_hba`)
 - 사용 흔적은 S3 전환 시점까지만 쌓이고 그 뒤 멈춘 모습
 - 일정: 11/22 생성, 11/25 사용 흔적 보완·다중 주소
 - 근거: `docs/02-infra-design.md` 2·4절, `docs/plan-wbs.md` 3절 기능 1

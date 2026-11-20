@@ -37,7 +37,11 @@
 | app-01 | PostgreSQL 16(운영 DB, 더미 매장·예약 데이터), `pg_dump` → S3 cron(IAM 역할), awscli, `[backup-legacy]` 흔적 |
 | db-backup-01 | 진짜 OpenSSH, rsync 수신 설정, `backup` 계정, `/backup/dumps` 옛 덤프(전환 시점까지), 복원 검증용 DB 5432, 보조 IP 3개 |
 
-- **미결정**: 디코이 5432를 Python 더미 리스너 대신 **진짜 PostgreSQL + `log_connections`**(미끼 계정 로그인 실패를 로그로 탐지)로 바꿀지 — ②의 구현 차이 단서와 "디코이 전용 프로세스" 단서가 함께 사라짐. 11/22 디코이 구성 전 결정
+- **결정(11/20)**: 디코이 5432는 Python 더미 리스너 대신 **진짜 PostgreSQL 16 + `log_connections`**. ②의 구현 차이 단서와 "디코이 전용 프로세스" 단서가 함께 사라짐
+  - 미끼 계정(`report_ro`·`sync_svc`)은 디코이 PG에 만들지 않음 → 로그인은 실패하고, 서버 로그에 `password authentication failed for user "…"`가 남음(문서 원안대로, 범위 늘리지 않음)
+  - 경보는 **모든 접속**(`connection received`부터)에 울림. 서버에는 미끼 계정 이름 목록을 두지 않고, 사용자명 → T1/T5 대응은 서버 밖(`detection/`)에서 함("접속 자체가 신호", 3절)
+  - 같은 PG 로그 설정(`log_connections`·`log_disconnections`, CIS PostgreSQL Benchmark 권고 항목)을 app-01에도 적용(변경 A)
+  - 대가: 여유 시 tar-pit은 리스너 코드 대신 PG contrib `auth_delay`로. 메모리는 11/22 부하 테스트에서 확인
 - **지울 수 없는 단서 후보**: cloud-init 로그(`/var/log/cloud-init.log`, `/var/lib/cloud`)의 최초 부팅 날짜(11/21~22). 세 서버 공통이라 디코이 전용은 아니지만 "오래 쓴 백업 서버" 서사와 충돌 → 기능 1에서 확인, 안 되면 한계로 기록
 
 ### 구성도 (초안)
@@ -81,6 +85,9 @@ flowchart LR
 - 이름 규칙: 버킷 `moayeyak-db-backup-<난수 6자리>`, 웹 앱 계정 `deploy`, 디코이 미끼 계정 `backup`, 미끼 DB 계정 `report_ro`·`sync_svc`, 옛 IAM 사용자 `backup-legacy`, 현재 IAM 역할 `backup-writer`
 - **과거**: app-01이 매일 DB 덤프를 db-backup-01로 rsync, S3 업로드는 IAM 사용자 `backup-legacy`의 장기 액세스 키로 수행
 - **현재**: app-01의 IAM 역할 `backup-writer`(특정 버킷 `PutObject`만, IMDSv2)로 S3에 직접 백업. db-backup-01로의 rsync는 중단
+- **시간표(11/20 확정)**: 서비스 운영 시작 **2024-03** → S3 전환 **2025-09**. `backup-legacy` 키는 약 2년 8개월, 디코이 사용 흔적은 2025-09에서 멈춤(약 14개월 방치). 근거: Datadog 2024 "IAM 사용자 60%가 1년 넘은 활성 키". `/srv/app` 커밋 이력·의존성 버전·디코이 흔적은 모두 이 날짜에 맞춤(버전은 PyPI 배포일보다 앞선 커밋에 쓰지 않음)
+- **사람(11/20)**: `/srv/app` 커밋 작성자는 가상 개발자 2명, 메일은 RFC 2606 예약 도메인 `@moayeyak.example`(실존 주소와 겹치지 않음. 대가: 도메인으로 가상임을 알 수 있음 → 한계로 기록)
+- **T6 계정(11/20)**: S3 백업 cron과 `[backup-legacy]` 미끼 파일은 **같은 계정**(서사: 예전엔 같은 스크립트가 키를 썼음). awscli는 자격증명 탐색 중 `~/.aws/credentials`를 IMDS보다 먼저 읽으므로 매일 백업이 T6 호스트 1차 탐지 오탐을 낼 것으로 예상 → 기준선에서 확인·억제(11/27 strace로 실제 동작 확인). 어느 계정인지는 11/27 확정
 - **정리 안 된 것 = 미끼 둘**
   - db-backup-01: 옛 덤프 파일, 중단된 rsync 수신 흔적, "복원 검증용" DB 5432. 사용 흔적은 전환 시점까지만 있으면 되므로 최근 로그인 없음이 자연스러움
   - app-01 `~/.aws/credentials`의 `[backup-legacy]` 프로필: IAM 사용자 `backup-legacy`, 권한 없음 → 공격자가 쓰면 AccessDenied
@@ -132,8 +139,8 @@ flowchart LR
 - [ ] SSM Session Manager 접속 — 계정 확인 후 11/21
 
 ## 8. 남은 논의 (11/21 구축 전까지)
-- app-01 정상 관리 작업 목록(기준선 근거)
-- 디코이 5432 구현 방식(2절 미결정)
+- ~~app-01 정상 관리 작업 목록(기준선 근거)~~ → 11/20 `scenarios/baseline/app-01.md`
+- ~~디코이 5432 구현 방식(2절 미결정)~~ → 11/20 진짜 PostgreSQL 16 + `log_connections`(2절)
 
 ## 전환 사유 (11/19)
 - OCI 서버에 AWS 키만 있는 구성은 이유를 설명하기 어려워 이야기 일관성이 깨짐. AWS 단일 환경이면 "역할 전환 후 남은 장기 키"라는 현실적인 서사가 가능
