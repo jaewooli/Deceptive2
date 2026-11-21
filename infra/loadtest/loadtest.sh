@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 부하 테스트 (plan-wbs 6절 "11/22 필수 확인"). 대상 서버에서 root로, /tmp에 복사해 실행한다.
 #   sudo bash /tmp/loadtest.sh <decoy|app|web> [초]   # 기본 300초
+#   sudo NO_CLAM=1 bash /tmp/loadtest.sh web           # clamscan 빼고(web·app은 기준선에서 clamscan 제외, 11/21)
 # 서버에 올라가는 코드가 아니다(servers/ 밖). 끝나면 만든 임시 파일·프로세스를 지우고 결과만 stdout에 낸다.
 #
 # 동시에 거는 부하
@@ -62,7 +63,9 @@ while :; do for i in $(seq 50); do /bin/true; id >/dev/null; done; sleep 0.2; do
 EOF
 bash "$W/execloop.sh" & PIDS+=($!)
 
-if [ -d /var/lib/clamav ] && ls /var/lib/clamav/*.c[lv]d >/dev/null 2>&1; then
+if [ "${NO_CLAM:-0}" = 1 ]; then
+  CLAM="생략(NO_CLAM=1 — web·app 기준선엔 clamscan 없음)"
+elif [ -d /var/lib/clamav ] && ls /var/lib/clamav/*.c[lv]d >/dev/null 2>&1; then
   ( s=$SECONDS; clamscan -r -i --exclude-dir='^/(proc|sys|dev|run)' / > "$W/clam.out" 2>&1; echo "exit=$? 걸린시간=$((SECONDS - s))s" > "$W/clam.done" ) &
   PIDS+=($!)
   CLAM=started

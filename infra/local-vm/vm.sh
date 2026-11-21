@@ -62,8 +62,8 @@ up() {
   [ -f "$DISK" ] || qemu-img create -q -f qcow2 -F qcow2 -b "$BASE" "$DISK" 20G
   make_seed
   # cloud-init NoCloud 시드를 HTTP로 제공(게스트에서 10.0.2.2 = 호스트 127.0.0.1)
-  python3 -m http.server "$SEED_PORT" --bind 127.0.0.1 --directory "$SEED" >"$DIR/seed-http.log" 2>&1 &
-  echo $! > "$DIR/seed-http.pid"
+  python3 -m http.server "$SEED_PORT" --bind 127.0.0.1 --directory "$SEED" >"$DIR/seed-http-$NAME.log" 2>&1 &
+  echo $! > "$DIR/seed-http-$NAME.pid"
   # shellcheck disable=SC2046
   qemu-system-x86_64 $(accel) -m "$MEM" -smp "$CPUS" -machine q35 \
     -drive file="$DISK",if=virtio,format=qcow2 \
@@ -87,7 +87,7 @@ wait_ssh() {
   echo "SSH 대기 시간 초과. 콘솔 로그 확인" >&2; exit 1
 }
 
-stop_seed() { [ -f "$DIR/seed-http.pid" ] && kill "$(cat "$DIR/seed-http.pid")" 2>/dev/null; rm -f "$DIR/seed-http.pid"; }
+stop_seed() { [ -f "$DIR/seed-http-$NAME.pid" ] && kill "$(cat "$DIR/seed-http-$NAME.pid")" 2>/dev/null; rm -f "$DIR/seed-http-$NAME.pid"; }
 
 down() {
   local pid=""
