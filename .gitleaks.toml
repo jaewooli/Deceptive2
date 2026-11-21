@@ -8,4 +8,6 @@ description = "미끼 템플릿 자리표시자({{ ... }})와 AWS 문서 예시 
 regexes = [
   '''\{\{\s*[A-Za-z0-9_.]+\s*\}\}''',
   '''AKIAIOSFODNN7EXAMPLE''',
+  # CloudWatch 에이전트 패키지 서명 키의 공개 지문(AWS 문서 공개값, servers/base/install.sh)
+  '''937616F3450B7D806CBD9725D58167303B789C72''',
 ]

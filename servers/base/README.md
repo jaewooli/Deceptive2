@@ -5,7 +5,9 @@ web-01·app-01·db-backup-01에 **같은 파일 한 벌**을 배포한다. 호�
 
 - `install.sh base`: 시간대 Asia/Seoul, auditd·clamav(clamd 없음, freshclam만)·unattended-upgrades·logrotate·cron, audit 규칙
 - `install.sh postgresql`: PG가 있는 서버(app-01, db-backup-01)에서 같은 PG 설정 — `postgresql/50-logging.conf`(접속·종료 기록, CIS PostgreSQL Benchmark 권고), `50-listen.conf` + `pg_hba` 내부망(10.0.0.0/16, scram-sha-256)
-- 남은 것: CloudWatch 에이전트 설정(계정 필요, 11/21~22)
+- `install.sh agents`(base 끝에서 자동): SSM 에이전트(snap — Ubuntu EC2 AMI 기본, 없을 때만 설치), CloudWatch 에이전트(서울 리전 버킷 deb, AWS 서명 키 지문 `9376 16F3 … 3B78 9C72` 확인 후 설치) + `cloudwatch/agent.json`
+- `cloudwatch/agent.json`(세 서버 같은 파일, 11/21): `/var/log/auth.log` → `/moayeyak/auth`, `/var/log/audit/audit.log` → `/moayeyak/audit`, PG 로그 → `/moayeyak/postgresql`, 스트림 `{instance_id}`. 지표 수집 없음(사용자 지표는 과금). PG 경로는 web-01에 파일이 없어도 그대로 둔다(설정이 서버마다 달라지지 않게). PG 로그를 밖으로 보내는 이유 = 사용자명 → T1/T5 대응을 서버 밖에서 하기로 한 11/20 결정
+- 시간대 변경 뒤 `rsyslog` 재시작: 안 하면 rsyslog가 시작할 때의 UTC로 계속 써서 auth.log에 `+00:00`과 `+09:00`이 섞인다(로컬 VM 확인). EC2에서도 같다(시간대를 base가 바꾸므로)
 - 근거: `docs/plan-wbs.md` 3절 기능 1(감시 흔적 동일화 원칙), `docs/02-infra-design.md` 2절
 - 디코이 전용으로 허용되는 것: 목적지 탐지에 필요한 DB 리스너뿐(성공 기준). 11/20 진짜 PG로 결정해서 이것도 공통이 됨 → 디코이 전용 0개가 목표
 
@@ -33,5 +35,5 @@ web-01·app-01·db-backup-01에 **같은 파일 한 벌**을 배포한다. 호�
 | 웹 셸(gunicorn 하위)은 auid 없음 | web-01 초기 침투 명령이 `user-cmd`에 안 남음 | 초기 침투(T1190)는 탐지 대상 아님(02-infra 5절). 디코이 접속부터 잡음 |
 | SSM 세션의 auid 미확인 | 관리자 SSM 작업이 기록에서 빠질 수 있음 | 11/21 계정으로 확인 |
 
-## 로컬 확인 (11/20, `infra/local-vm/`)
+## 로컬 확인 (11/20~21, `infra/local-vm/`, 부하 테스트는 `infra/loadtest/`)
 - Ubuntu 24.04.5 클라우드 이미지 VM에서 `install.sh base` → 규칙 41줄 로드, 서비스 모두 active

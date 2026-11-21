@@ -2,6 +2,7 @@
 # 공통 서버 설정. root로 실행, 여러 번 실행해도 결과가 같다.
 #   sudo ./install.sh            # 공통 패키지·audit 규칙
 #   sudo ./install.sh postgresql # PostgreSQL이 설치된 서버에서 공통 PG 설정
+# CWAGENT_MODE: EC2에서는 ec2(기본). 로컬 VM에서는 onPremise(리전은 agent.json에 고정, 자격증명 없음 → 전송만 실패)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -10,8 +11,16 @@ AUDIT_EXAMPLES=/usr/share/doc/auditd/examples/rules
 # 그 뒤 규칙을 모두 건너뛴다. 오류 줄만 건너뛰고 계속 로드한다
 AUDIT_FROM_EXAMPLES=(10-base-config.rules 12-ignore-error.rules 30-stig.rules 43-module-load.rules)
 
+# CloudWatch 에이전트: 서울 리전 버킷(내부 서버는 S3 게이트웨이 엔드포인트로 받음), AWS 서명 키로 검증
+CWAGENT_URL=https://amazoncloudwatch-agent-ap-northeast-2.s3.ap-northeast-2.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+CWAGENT_KEY_URL=https://amazoncloudwatch-agent.s3.amazonaws.com/assets/amazon-cloudwatch-agent.gpg
+CWAGENT_KEY_FPR=937616F3450B7D806CBD9725D58167303B789C72
+CWAGENT_DIR=/opt/aws/amazon-cloudwatch-agent
+
 base() {
   timedatectl set-timezone Asia/Seoul
+  # rsyslog는 시작할 때의 시간대로 계속 쓴다 → 재시작하지 않으면 auth.log에 UTC(+00:00)와 KST가 섞인다
+  systemctl restart rsyslog
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -q
   apt-get install -y -q auditd clamav unattended-upgrades logrotate cron
@@ -30,6 +39,30 @@ base() {
 
   systemctl enable --now unattended-upgrades cron logrotate.timer
   systemctl enable --now clamav-freshclam || true
+
+  agents
+}
+
+# 관리·로그 에이전트 2종. 세 서버 같은 설정 한 벌(변경 A)
+agents() {
+  # SSM 에이전트: Ubuntu EC2 AMI에는 snap으로 기본 설치돼 있다. 없는 경우(로컬 VM)만 같은 snap으로 설치
+  snap list amazon-ssm-agent >/dev/null 2>&1 || snap install amazon-ssm-agent --classic
+
+  if ! dpkg -s amazon-cloudwatch-agent >/dev/null 2>&1; then
+    local t; t=$(mktemp -d)
+    curl -fsSL -o "$t/a.deb" "$CWAGENT_URL"
+    curl -fsSL -o "$t/a.deb.sig" "$CWAGENT_URL.sig"
+    curl -fsSL -o "$t/key.gpg" "$CWAGENT_KEY_URL"
+    export GNUPGHOME="$t/gnupg"; install -d -m 0700 "$GNUPGHOME"
+    gpg -q --import "$t/key.gpg"
+    gpg --with-colons --fingerprint | grep -q "^fpr:::::::::$CWAGENT_KEY_FPR:" || { echo "CloudWatch 에이전트 키 지문 불일치" >&2; exit 1; }
+    gpg -q --verify "$t/a.deb.sig" "$t/a.deb"
+    unset GNUPGHOME
+    dpkg -i -E "$t/a.deb"
+    rm -rf "$t"
+  fi
+  install -m 0644 cloudwatch/agent.json "$CWAGENT_DIR/etc/agent.json"
+  "$CWAGENT_DIR/bin/amazon-cloudwatch-agent-ctl" -a fetch-config -m "${CWAGENT_MODE:-ec2}" -s -c "file:$CWAGENT_DIR/etc/agent.json"
 }
 
 postgresql() {
@@ -45,6 +78,7 @@ postgresql() {
 
 case "${1:-base}" in
   base) base ;;
+  agents) agents ;;
   postgresql) postgresql ;;
-  *) echo "사용법: $0 [base|postgresql]" >&2; exit 2 ;;
+  *) echo "사용법: $0 [base|agents|postgresql]" >&2; exit 2 ;;
 esac
