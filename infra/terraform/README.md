@@ -22,7 +22,7 @@ modules/
   ssm-role/              SSM·CloudWatch 인스턴스 프로파일
   security/              보안 그룹 3개
   host/                  ENI(보조 IP)·EIP·인스턴스 — 3번 호출
-  # (11/27) storage, iam-backup, cloudtrail
+  # (11/28) storage, iam-backup, cloudtrail
 ```
 
 `host` 모듈 하나를 web-01/app-01/db-backup-01 3번 호출할 예정(차이는 서브넷·타입·SG·보조 IP 개수 파라미터).

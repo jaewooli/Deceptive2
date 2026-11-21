@@ -86,4 +86,4 @@ module "db_backup_01" {
   secondary_ip_count   = 3
 }
 
-# 11/27 이후: modules/storage(S3 버킷), modules/iam-backup(backup-writer·backup-legacy), modules/cloudtrail
+# 11/28: modules/storage(S3 버킷), modules/iam-backup(backup-writer·backup-legacy), modules/cloudtrail

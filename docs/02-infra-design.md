@@ -101,7 +101,8 @@ flowchart LR
 
 ### AWS 키 탐지
 - 1차 호스트(파일 열람, 60초) / 2차 CloudTrail → EventBridge → Lambda → 웹훅(5분 이내). `backup-legacy`의 모든 API 호출(성공·실패 무관) 대상
-- 검증 필요: 읽기 전용 호출(`sts get-caller-identity` 등)이 EventBridge로 전달되는지. 안 되면 CloudTrail → CloudWatch Logs 지표 필터
+- ~~검증 필요: 읽기 전용 호출이 EventBridge로 전달되는지~~ → **문서로 확인(11/21)**: 전달된다. 조건 ① CloudTrail 추적이 읽기 이벤트까지 기록 ② EventBridge 규칙 상태 `ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`(그냥 `ENABLED`는 읽기 전용 제외). 2023-11 이전 튜토리얼의 "List·Get·Describe는 처리 안 함"은 옛 제약. `sts:GetCallerIdentity`도 CloudTrail에 기록(IAM 문서: STS 인증 호출 전부 기록) — 탈취 키 유효성 확인에 쓰이는 첫 호출이라 미끼 탐지에 맞음. 남은 것: 실제 지연(5분 목표)과 끝에서 끝까지 동작, 11/28 계정으로
+  - 출처: [AWS 블로그](https://aws.amazon.com/blogs/compute/introducing-support-for-read-only-management-events-in-amazon-eventbridge/), [EventBridge 문서](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-service-event-cloudtrail-management.html), [IAM CloudTrail 문서](https://docs.aws.amazon.com/IAM/latest/UserGuide/cloudtrail-integration.html), [Elastic 룰](https://www.elastic.co/guide/en/security/current/aws-sts-getcalleridentity-api-called-for-the-first-time.html)
 
 ## 5. 공격 경로와 함정 목록 (시나리오 1·2)
 1. 공격자가 web-01 취약점으로 셸 획득 (T1190, 탐지 대상 아님) — 앱은 `deploy` 계정으로 실행, 취약점은 1개: 영수증(예약 확인서) PDF 생성 기능의 명령 주입 — **이 함수는 직접 작성**
