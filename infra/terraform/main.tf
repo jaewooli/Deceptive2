@@ -43,11 +43,13 @@ module "security" {
 # web-01 — 모아예약 웹(public, 의도적 취약점 → 초기 침투 지점)
 module "web_01" {
   source = "./modules/host"
+  # EIP 는 IGW 가 VPC 에 붙은 뒤에만 연결된다. EIP→ENI→서브넷 경로엔 IGW 가 없어 순서를 강제
+  depends_on = [module.network]
 
   project              = var.project
   name                 = "web-01"
   ami_id               = data.aws_ssm_parameter.ubuntu_2404.value
-  instance_type        = "t3.micro"
+  instance_type        = "t3.small" # 11/21 부하 테스트: 1GiB에서 clamscan(기준선 정상 작업) OOM → t3.small
   subnet_id            = module.network.public_subnet_id
   security_group_id    = module.security.web_sg_id
   iam_instance_profile = module.ssm_role.instance_profile_name
@@ -56,11 +58,13 @@ module "web_01" {
 # app-01 — 운영 PostgreSQL + S3 백업(internal)
 module "app_01" {
   source = "./modules/host"
+  # EIP 는 IGW 가 VPC 에 붙은 뒤에만 연결된다. EIP→ENI→서브넷 경로엔 IGW 가 없어 순서를 강제
+  depends_on = [module.network]
 
   project              = var.project
   name                 = "app-01"
   ami_id               = data.aws_ssm_parameter.ubuntu_2404.value
-  instance_type        = "t3.micro"
+  instance_type        = "t3.small" # 11/21 부하 테스트: 1GiB에서 clamscan(기준선 정상 작업) OOM → t3.small
   subnet_id            = module.network.internal_subnet_id
   security_group_id    = module.security.app_sg_id
   iam_instance_profile = module.ssm_role.instance_profile_name
@@ -69,6 +73,8 @@ module "app_01" {
 # db-backup-01 — 디코이(internal, 단일 호스트 다중 주소: 보조 사설 IP 3개)
 module "db_backup_01" {
   source = "./modules/host"
+  # EIP 는 IGW 가 VPC 에 붙은 뒤에만 연결된다. EIP→ENI→서브넷 경로엔 IGW 가 없어 순서를 강제
+  depends_on = [module.network]
 
   project              = var.project
   name                 = "db-backup-01"
