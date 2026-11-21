@@ -7,7 +7,7 @@ OS 설정·미끼·함정 배포는 범위 밖(SSM Run Command/Ansible, 변경 C
 - **apply 보류** — AWS 계정 확인 대기 중(11/21). 코드만 먼저 작성(계정 없이 가능한 준비, WBS 11/21).
 - 11/21: Terraform 1.17.2 + AWS provider 5.100.0(`.terraform.lock.hcl` 커밋)으로 `fmt -check`·`validate` 통과. `plan`은 자격증명 필요(AMI SSM 파라미터 조회)
 - 11/21: 호스트 모듈 3개에 `depends_on = [module.network]` — EIP는 IGW가 VPC에 붙은 뒤에만 ENI에 연결되는데, EIP→ENI→서브넷→VPC 경로에 IGW가 없어 순서가 보장되지 않았음
-- 11/21: web-01·app-01 `t3.micro` → `t3.small`(부하 테스트에서 1GiB OOM, `../loadtest/README.md`). 세 대가 같은 타입이 되어 인스턴스 타입(IMDS로 보임)도 디코이만의 차이가 아니게 됨
+- 11/21: web-01·app-01은 `t3.micro` 유지. 1GiB에서 clamscan이 OOM이지만 clamscan은 기준선 시험용으로만 돌리므로 web·app에서는 빼고, 서버 크기는 키우지 않음(`../loadtest/README.md`)
 - state: **로컬**(S3/DynamoDB 백엔드 없음 → 추가 비용 0). `*.tfstate` 는 `.gitignore`(계정 ID·리소스 ID·미끼 키 포함 가능).
 
 ## 구성

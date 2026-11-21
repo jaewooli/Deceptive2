@@ -33,10 +33,11 @@ infra/local-vm/vm.sh ssh 'cat > /tmp/loadtest.sh; sudo bash /tmp/loadtest.sh dec
 | web (t3.micro 상당) | 1 GiB | 326 → 3 MiB | **1 (clamscan)** | 538 MiB에서 강제 종료 |
 | app, clamscan만(`/etc`) | 1 GiB | 577 → — | **1** | 574 MiB에서 강제 종료 — 부하가 겹쳐서가 아니라 clamscan 혼자로도 |
 | app + 스왑 1GiB(VM에만 임시) | 1 GiB | 581 → 38 MiB | 0 | 600초 안에 안 끝남, 스왑아웃 약 93만 페이지(≈3.6GB) — 쓰래싱 |
-| **app (t3.small, 결정 후)** | 2 GiB | 1596 → 452 MiB | 0 | 최대 RSS 1117 MiB |
-| **web (t3.small, 결정 후)** | 2 GiB | 1482 → 502 MiB | 0 | 최대 RSS 979 MiB |
+| app (참고, 2 GiB) | 2 GiB | 1596 → 452 MiB | 0 | 최대 RSS 1117 MiB |
+| web (참고, 2 GiB) | 2 GiB | 1482 → 502 MiB | 0 | 최대 RSS 979 MiB |
 
-- **결정(11/21)**: web-01·app-01을 **t3.small**로(`infra/terraform/main.tf`). 비용 약 +$8.7(약 $23 → 약 $32, Budgets $20 알림은 넘음). 스왑(쓰래싱)·micro만 clamscan 제외(web-01 미끼의 ClamAV 오탐원 측정 불가)·ClamAV 제거 대신
+- **결정(11/21)**: web-01·app-01은 **t3.micro 유지**, 기준선에서 web·app의 clamscan은 뺀다. clamscan은 서버에서 평소에 돌지 않고(검사 cron 없음) 기준선 오탐 시험용일 뿐이라, 시험 한 번 때문에 서버를 키울 이유가 없음(비용 규칙). ClamAV 오탐은 디코이에서만 재고 web·app은 한계로 기록. web-01 미끼의 "내용을 여는 작업" 오탐은 `grep -r password`·백업으로 잰다
+- clamscan을 뺀 1GiB 프로파일(에이전트 + 역할 서비스 + 로그인·요청 폭주)은 계정 확인 후 EC2에서 측정
 
 - 에이전트 목록: 세 VM 모두 auditd·SSM 에이전트 snap 3.3.4793.0·CloudWatch 에이전트 1.300075.0b2061-1·freshclam·unattended-upgrades·cron active, `auditctl -l` 41줄
 - OOM 때 죽은 것은 clamscan뿐(점수가 가장 높음). PG·gunicorn·에이전트·moa-notify는 살아 있음
