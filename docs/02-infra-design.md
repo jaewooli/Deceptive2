@@ -8,7 +8,7 @@
   - 주의: Builder ID로 로그인하면 "새 가입 방식(프로젝트)" 화면이 열리고 리전이 연락처 기준(아시아는 시드니)으로 고정된 것처럼 보임 → root로 로그인하니 일반 콘솔에서 서울 사용 가능 확인(11/19)
   - 11/19 현재 **계정 확인 진행 중**(최대 2일, CloudShell 환경 생성 불가). 11/20 저녁까지 안 풀리면 11/21은 계정 없이 가능한 준비(웹 앱, auditd 규칙, 디코이 DB 탐지, Git 저장소)로 돌리고 구축은 11/22에 몰아서 진행
 - 기본 설정 완료(11/19): Budgets 알림($10, $20), 루트 계정 MFA. root는 계정 관리용으로만 사용. (권장) Cost Anomaly Detection 활성화
-- 예상 사용액(11/19 재계산, 추정): 인스턴스 약 $17 + **공인 IPv4 3개 약 $5**(IP당 시간당 $0.005) + EBS 약 $1 + 로그 소량 ≈ **약 $23** (실제 청구)
+- 예상 사용액(11/19 재계산, 추정): 인스턴스 약 $17 + **공인 IPv4 3개 약 $5**(IP당 시간당 $0.005) + EBS 약 $1 + 로그 소량 ≈ **약 $23** (실제 청구) → **11/21 약 $32**: web-01·app-01 t3.small(+약 $8.7). 비용은 후순위(11/21 결정)
 - 비용 절감: 작업하지 않는 밤에 web-01·app-01 중지 가능. 디코이는 uptime이 진정성 측정 항목이라 계속 켜 둠
 - **NAT 게이트웨이 사용 금지**
 - 12/4 보고서 게시 후 인스턴스 중지·정리 (필요한 것만 스냅샷)
@@ -16,8 +16,8 @@
 ## 2. 자원
 | 호스트 | 가상 회사 내 역할 | 타입 | 서브넷 | 비고 |
 |---|---|---|---|---|
-| web-01 | 모아예약 웹 서비스 (의도적 취약점 1개 → 초기 침투 지점) | t3.micro (1GB) | public 10.0.1.0/24 | 80/443 내 공인 IP만 |
-| app-01 | 내부 업무 서버 (운영 PostgreSQL, 실제 S3 백업 작업) | t3.micro (1GB) | internal 10.0.2.0/24 | IAM 역할 `backup-writer` 부착 |
+| web-01 | 모아예약 웹 서비스 (의도적 취약점 1개 → 초기 침투 지점) | ~~t3.micro~~ → t3.small (2GB, 11/21) | public 10.0.1.0/24 | 80/443 내 공인 IP만 |
+| app-01 | 내부 업무 서버 (운영 PostgreSQL, 실제 S3 백업 작업) | ~~t3.micro~~ → t3.small (2GB, 11/21) | internal 10.0.2.0/24 | IAM 역할 `backup-writer` 부착 |
 | db-backup-01 | **디코이** — S3 전환 후 정리되지 않은 옛 DB 백업 서버, 실제 OS | t3.small (2GB) | internal 10.0.2.0/24 | 보조 사설 IP 최대 3개(단일 호스트 다중 주소) |
 
 - **ENI 한도 확인(11/19, 콘솔)**: t3.small 최대 네트워크 인터페이스 3개, 인터페이스당 IPv4 4개 → 기본 ENI 하나로 주 IP + 보조 IP 3개 가능. 보조 사설 IP는 무료
@@ -32,7 +32,7 @@
 
 | 구분 | 구성 |
 |---|---|
-| 공통 베이스 | Ubuntu Server 24.04 LTS AMI(SSM 에이전트 기본 설치), CloudWatch 에이전트, auditd + 같은 규칙, unattended-upgrades, logrotate, cron, Asia/Seoul, 관리자 계정 |
+| 공통 베이스 | Ubuntu Server 24.04 LTS AMI(SSM 에이전트 기본 설치), CloudWatch 에이전트, auditd + 같은 규칙, ClamAV + 매일 전체 검사 cron(11/21), unattended-upgrades, logrotate, cron, Asia/Seoul, 관리자 계정 |
 | web-01 | nginx → gunicorn → Flask(모아예약: 랜딩·매장 목록·예약 폼·관리자 로그인·예약 확인서 PDF), systemd 유닛, `/srv/app` git 저장소(커밋 이력), `deploy` 계정, 쌓인 접근 로그, 앱이 실제로 app-01 DB에 연결. 웹 앱 작업 3시간 상한. 푸터에 "가상의 회사" 표기 |
 | app-01 | PostgreSQL 16(운영 DB, 더미 매장·예약 데이터), `pg_dump` → S3 cron(IAM 역할), awscli, `[backup-legacy]` 흔적 |
 | db-backup-01 | 진짜 OpenSSH, rsync 수신 설정, `backup` 계정, `/backup/dumps` 옛 덤프(전환 시점까지), 복원 검증용 DB 5432, 보조 IP 3개 |

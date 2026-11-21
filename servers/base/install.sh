@@ -39,6 +39,9 @@ base() {
 
   systemctl enable --now unattended-upgrades cron logrotate.timer
   systemctl enable --now clamav-freshclam || true
+  # 정기 전체 검사: 백신을 깔아 두고 검사를 안 하는 서버는 앞뒤가 안 맞는다. 세 서버 같은 파일
+  install -m 0644 clamav/clamav-scan.cron /etc/cron.d/clamav-scan
+  install -m 0644 clamav/clamav-scan.logrotate /etc/logrotate.d/clamav-scan
 
   agents
 }

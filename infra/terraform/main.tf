@@ -49,7 +49,7 @@ module "web_01" {
   project              = var.project
   name                 = "web-01"
   ami_id               = data.aws_ssm_parameter.ubuntu_2404.value
-  instance_type        = "t3.micro"
+  instance_type        = "t3.small" # 11/21: 1GiB에선 ClamAV 정기 검사(세 서버 공통 cron)가 OOM
   subnet_id            = module.network.public_subnet_id
   security_group_id    = module.security.web_sg_id
   iam_instance_profile = module.ssm_role.instance_profile_name
@@ -64,7 +64,7 @@ module "app_01" {
   project              = var.project
   name                 = "app-01"
   ami_id               = data.aws_ssm_parameter.ubuntu_2404.value
-  instance_type        = "t3.micro"
+  instance_type        = "t3.small" # 11/21: 1GiB에선 ClamAV 정기 검사(세 서버 공통 cron)가 OOM
   subnet_id            = module.network.internal_subnet_id
   security_group_id    = module.security.app_sg_id
   iam_instance_profile = module.ssm_role.instance_profile_name

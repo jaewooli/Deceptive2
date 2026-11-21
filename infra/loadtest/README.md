@@ -35,10 +35,10 @@ infra/local-vm/vm.sh ssh 'cat > /tmp/loadtest.sh; sudo bash /tmp/loadtest.sh dec
 | app + 스왑 1GiB(VM에만 임시) | 1 GiB | 581 → 38 MiB | 0 | 600초 안에 안 끝남, 스왑아웃 약 93만 페이지(≈3.6GB) — 쓰래싱 |
 | **app, clamscan 없음** | 1 GiB | 555 → 543 MiB | 0 | — |
 | **web, clamscan 없음** | 1 GiB | 484 → 468 MiB | 0 | — |
-| app (참고, 2 GiB) | 2 GiB | 1596 → 452 MiB | 0 | 최대 RSS 1117 MiB |
-| web (참고, 2 GiB) | 2 GiB | 1482 → 502 MiB | 0 | 최대 RSS 979 MiB |
+| **app (t3.small)** | 2 GiB | 1596 → 452 MiB | 0 | 최대 RSS 1117 MiB |
+| **web (t3.small)** | 2 GiB | 1482 → 502 MiB | 0 | 최대 RSS 979 MiB |
 
-- **결정(11/21)**: web-01·app-01은 **t3.micro 유지**, 기준선에서 web·app의 clamscan은 뺀다. clamscan은 서버에서 평소에 돌지 않고(검사 cron 없음) 기준선 오탐 시험용일 뿐이라, 시험 한 번 때문에 서버를 키울 이유가 없음(비용 규칙). ClamAV 오탐은 디코이에서만 재고 web·app은 한계로 기록. web-01 미끼의 "내용을 여는 작업" 오탐은 `grep -r password`·백업으로 잰다
+- **결정(11/21 최종)**: 세 서버에 **ClamAV 매일 전체 검사 cron**(`servers/base/clamav/`)을 두고, web-01·app-01은 **t3.small**. 백신을 깔고 검사를 안 하는 서버는 앞뒤가 안 맞고, 정기 검사는 실제로 미끼 파일을 여는 정상 작업이라 오탐 시험에도 그대로 쓰인다. 비용(약 +$8.7)은 후순위. (중간에 micro 유지 + web·app clamscan 제외로 갔다가 되돌림)
 - clamscan을 뺀 1GiB(`NO_CLAM=1`, 11/21 로컬): **app 555 → 543 MiB, web 484 → 468 MiB, OOM 0**, 서비스 모두 active. EC2에서 다시 확인
 
 - 에이전트 목록: 세 VM 모두 auditd·SSM 에이전트 snap 3.3.4793.0·CloudWatch 에이전트 1.300075.0b2061-1·freshclam·unattended-upgrades·cron active, `auditctl -l` 41줄

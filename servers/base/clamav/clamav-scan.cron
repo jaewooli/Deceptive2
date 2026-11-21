@@ -1,0 +1,2 @@
+# 매일 전체 검사 (감염 파일만 기록)
+17 3 * * * root nice -n 19 ionice -c3 clamscan -r -i --exclude-dir='^/(proc|sys|dev|run|snap)' / >> /var/log/clamav/clamscan.log 2>&1
