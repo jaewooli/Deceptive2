@@ -150,7 +150,7 @@ def main():
         "services": svcs,
         "resolution": resolution(hostnames + ["db-backup-01", "stg-01"]),
         "etc_hosts_mtime": mtime("/etc/hosts"),
-        "tools": {t: bool(shutil.which(t)) for t in ("ssh", "psql", "aws", "git", "ssh-agent")},
+        "tools": {t: bool(shutil.which(t)) for t in ("ssh", "psql", "aws", "git", "ssh-agent", "tmux")},
         "processes": sorted(set(run("ps", "-eo", "comm=").split())),
     }, ensure_ascii=False))
 

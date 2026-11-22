@@ -14,7 +14,18 @@ Illusive식 **맥락 기반 원격 배포**(`docs/01-vendor-feature-map.md` 문�
 - 서버에서 도는 것은 `collect_context.py`·`apply_ops.py` 두 개뿐이고 Ansible `script`로 실행 뒤 남지 않는다. 미끼 내용은 root 0600 임시 파일로 넘긴다(명령 인자로 넘기면 auditd execve 기록에 남음 — 11/22 실측)
 - 관리 표시(`# BEGIN ANSIBLE MANAGED BLOCK` 등)를 남기지 않고, 고친 파일의 시각은 원래 값으로 되돌린다
 - 디코이 쪽 작업(SSH 미끼 공개키 → db-backup-01 `backup`의 `authorized_keys`)도 같은 채널로
-- 미끼 유형(11/22): `env_db_url`(T1형) · `ssh_config`(T2형) · `history`(T3형, T2의 길잡이) · `aws_profile`(T6형). 프로세스형(T4 ssh-agent·T5 환경변수)은 다음
+- 미끼 유형(11/22)
+  | 유형 | 맥락 조건 | 무엇 |
+  |---|---|---|
+  | `env_db_url`(T1형) | 앱 환경 파일이 PostgreSQL을 쓰고 비어 있는 `*_DB_URL`(꺼진 기능)이 있음 | 그 기능의 읽기 전용 계정으로 디코이 DB 주소. 다른 서버를 `/etc/hosts`로 찾는 서버면 디코이 이름도 |
+  | `ssh_config`(T2형) | 나가는 ssh를 쓰는 계정(known_hosts·개인키·config·히스토리) | Host 블록 + 키 + **known_hosts**(없으면 첫 접속 질문이 단서) + 디코이 `backup` authorized_keys |
+  | `history`(T3형) | T2 계정에 히스토리 20줄 이상 | 세션 경계(`exit` 다음)에 한 세션 덩어리, 앞쪽 60% 지점(끝이면 "최근에 썼다"가 됨) |
+  | `aws_profile`(T6형) | 그 계정의 cron(또는 cron이 부르는 스크립트)이 aws를 씀 | `[backup-legacy]` 장기 키(로컬은 형식만, AWS는 IAM 실제 키) |
+  | `agent_session`(T4형) | 히스토리 있는 사람 계정 + 나가는 ssh + tmux·ssh-agent 있음 | **잊힌 tmux 세션의 ssh-agent에만** 키(디스크엔 없음). 재부팅으로 사라지면 경보 없이 다시 엶 |
+  | `sync_service`(T5형) | 앱 환경 파일에 꺼진 기능 플래그(`*_ENABLED`) + 그 기능의 DB 주소 | 그 기능의 동기화 서비스가 대기만 하며 살아 있음, 유닛 `Environment=`에 디코이 DB 계정(디코이로 가는 정상 트래픽 없음) |
+- 레지스트리 상태: pending(서버 손대기 전 기록) → active / failed(회수로 정리) / retired(교체됨, 계속 감시) / recalled
+- 작업 순서: 출발 서버 먼저, 성공해야 디코이 쪽. verify는 디코이 authorized_keys의 모르는 일반 키도 경보(자동 삭제 안 함)
+- 남은 것: 옛 ID(retired 키) 사용 탐지엔 sshd `LogLevel VERBOSE`가 세 서버 공통으로 필요(CIS 권고) — 탐지 단계에서
 
 ```sh
 python3 baits/engine.py collect && python3 baits/engine.py plan    # 무엇을 어디에 둘지
@@ -25,3 +36,4 @@ python3 baits/engine.py apply | verify | rotate --all | recall --all | list
 ## 11/22 첫 실행에서 알게 된 것
 - **맥락 기반 배치는 서버가 진짜로 쓰인 서버일 때만 성립한다.** 로컬 web-01 `deploy`는 나가는 ssh 흔적이 없고 앱 DB가 SQLite(로컬 편의) → 규칙이 아무것도 두지 않음. 벤더는 고객의 실제 단말에서 맥락을 얻지만, 랩에선 정상 서버의 사용 흔적부터 만들어야 한다
 - 규칙 오판 하나: `~/.ssh`가 있다고 "ssh를 쓴다"로 봤더니 cloud-init `authorized_keys`만 있는 `ubuntu`에 SSH 미끼를 두려 함 → 나가는 흔적(known_hosts·개인키·ssh config·히스토리)만 세게 고침
+- T4·T5에서 또: ① 미끼가 자리를 차지하면 맥락이 바뀌어(빈 값 → 채워짐) 규칙이 "맥락 사라짐"으로 오판 → 규칙이 자기 미끼 자리를 같은 자리로 인식 ② 적용이 중간에 실패하면 서버엔 일부 적용, 레지스트리엔 없음(고아) → 먼저 pending으로 기록 ③ 출발 서버가 실패해도 디코이 쪽 키 추가는 같은 플레이북에서 돌아 고아 키가 쌓임 → 두 단계 + 목적지 감사

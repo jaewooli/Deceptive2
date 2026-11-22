@@ -147,6 +147,79 @@ def do(op, mode):
         lines[at:at] = want
         write(p, "".join(lines), op)
         return "changed"
+    if k == "unit":
+        # systemd 서비스 미끼: 유닛·스크립트 파일은 file 작업으로 먼저 두고, 여기선 켜짐 상태만
+        import subprocess
+        name = op["name"]
+        active = subprocess.run(["systemctl", "is-active", "--quiet", name]).returncode == 0
+        enabled = subprocess.run(["systemctl", "is-enabled", "--quiet", name]).returncode == 0
+        if mode == "absent":
+            subprocess.run(["systemctl", "disable", "--now", name], capture_output=True)
+            subprocess.run(["systemctl", "daemon-reload"])
+            return "absent"
+        if active and enabled:
+            return "ok"
+        if mode == "check":
+            return "drift"
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "enable", "--now", name], check=True, capture_output=True)
+        link = f"/etc/systemd/system/multi-user.target.wants/{name}"
+        t = when(op.get("mtime"))
+        if t and os.path.islink(link):
+            os.utime(link, (t, t), follow_symlinks=False)
+        return "changed"
+    if k == "agent_session":
+        # 잊힌 tmux 세션 안의 ssh-agent에 키를 올려 둔다. 키는 메모리에만(임시 파일은 ssh-add 뒤 바로 삭제)
+        import subprocess, glob, tempfile
+        user, sess, fp = op["user"], op["session"], op["fingerprint"]
+        pw_ = pwd.getpwnam(user)
+        def as_user(*cmd, **kw):
+            return subprocess.run(["/usr/sbin/runuser", "-u", user, "--", *cmd], capture_output=True, text=True, **kw)
+        def find():
+            for sock in glob.glob("/tmp/ssh-*/agent.*"):
+                try:
+                    if os.stat(sock).st_uid != pw_.pw_uid:
+                        continue
+                except OSError:
+                    continue
+                r = subprocess.run(["/usr/sbin/runuser", "-u", user, "--", "ssh-add", "-l"], env=dict(os.environ, SSH_AUTH_SOCK=sock),
+                                   capture_output=True, text=True)
+                if fp in r.stdout:
+                    return sock
+            return None
+        has_sess = as_user("tmux", "has-session", "-t", sess).returncode == 0
+        sock = find()
+        if mode == "absent":
+            if has_sess:
+                as_user("tmux", "kill-session", "-t", sess)
+            subprocess.run(["pkill", "-u", user, "-x", "ssh-agent"])
+            return "absent"
+        if has_sess and sock:
+            return "ok"
+        if mode == "check":
+            return "gone" if not has_sess else "drift"
+        if not has_sess:
+            as_user("tmux", "new-session", "-d", "-s", sess, "-x", "200", "-y", "50", cwd=pw_.pw_dir)
+        # 키를 사용자 소유 0600 임시 파일로 → 세션 안에서 사람이 친 것처럼 ssh-agent·ssh-add → 파일 삭제
+        fd, kp = tempfile.mkstemp(prefix=".k", dir="/tmp")
+        os.write(fd, op["private"].encode()); os.close(fd)
+        os.chown(kp, pw_.pw_uid, pw_.pw_gid); os.chmod(kp, 0o600)
+        for line in ("cd /srv/app", "eval $(ssh-agent -s)", f"ssh-add {kp} && rm -f {kp}", "clear", "git log --oneline -3"):
+            as_user("tmux", "send-keys", "-t", sess, line, "Enter")
+            time.sleep(0.4)
+        for _ in range(20):
+            if find():
+                break
+            time.sleep(0.3)
+        if os.path.exists(kp):
+            os.remove(kp)
+        return "changed" if find() else "failed"
+    if k == "decoy_audit":
+        # 옵션 없는 일반 키 중 레지스트리에 없는 것 = 고아 미끼(또는 사람이 넣은 키). 보고만 한다
+        home = pwd.getpwnam(op["user"]).pw_dir
+        cur = read(os.path.join(home, ".ssh", "authorized_keys")) or ""
+        plain = [l for l in cur.splitlines() if l.startswith(("ssh-", "ecdsa-"))]
+        return "drift" if [l for l in plain if l not in op["known"]] else "ok"
     if k == "decoy_key":
         home = pwd.getpwnam(op["user"]).pw_dir
         p = os.path.join(home, ".ssh", "authorized_keys")

@@ -89,7 +89,8 @@ def contexts():
 
 
 def anchor_key(tname, host, a):
-    pick = {"env_db_url": ("path", "key"), "ssh_config": ("user",), "history": ("user",), "aws_profile": ("user",)}[tname]
+    pick = {"env_db_url": ("path", "key"), "ssh_config": ("user",), "history": ("user",), "aws_profile": ("user",),
+            "agent_session": ("user",), "sync_service": ("name",)}[tname]
     return f"{tname}:{host}:" + ":".join(str(a[k]) for k in pick)
 
 
@@ -152,7 +153,20 @@ def split_ops(placements, mode):
 
 
 def run_ops(placements, mode):
+    """출발 서버 작업을 먼저, 성공한 뒤에 디코이 쪽 작업(11/22: 출발 쪽이 실패해도 디코이 키만 쌓이던 문제)"""
     by, index = split_ops(placements, mode)
+    decoys = set(inventory().get("decoys", []))
+    first = {h: v for h, v in by.items() if h not in decoys}
+    second = {h: v for h, v in by.items() if h in decoys}
+    states = {}
+    for part in (first, second):
+        if part:
+            for pid, st in _run({h: by[h] for h in part}, {h: index[h] for h in part}, mode).items():
+                states.setdefault(pid, []).extend(st)
+    return states
+
+
+def _run(by, index, mode):
     if not by:
         return {}
     OUT.mkdir(parents=True, exist_ok=True)
@@ -167,7 +181,8 @@ def run_ops(placements, mode):
     for task in out["plays"][0]["tasks"]:
         for h, res in task["hosts"].items():
             if res.get("failed") or res.get("unreachable"):
-                raise SystemExit(f"{h}: {res.get('msg') or res.get('stderr') or res}")
+                tail = lambda x: (x or "")[-1500:]
+                raise SystemExit(f"{h}: {res.get('msg')}\n--- stderr\n{tail(res.get('stderr'))}\n--- stdout\n{tail(res.get('stdout'))}")
             if res.get("stdout", "").startswith('{"results"'):
                 for x in json.loads(res["stdout"])["results"]:
                     pid, i = index[h][x["i"]]
@@ -200,12 +215,25 @@ def cmd_plan(a):
 def cmd_apply(a):
     r, new, gone = cmd_plan(a)
     pids = [build(r, n) for n in new]
-    states = run_ops([(pid, r["placements"][pid]) for pid in pids], "apply")
+    # 서버에 손대기 전에 먼저 기록한다 — 중간에 실패해도 무엇을 어디에 두려 했는지 남아 회수할 수 있다(11/22: 고아 미끼)
+    for pid in pids:
+        r["placements"][pid]["status"] = "pending"
+    save_reg(r)
     for pid in pids:
         p = r["placements"][pid]
-        event(r, "placed", pid, type=p["type"], host=p["host"], ident=p["ident"]["value"], states=states.get(pid))
-        print(f"배치 {pid} {p['type']} {p['host']} → {p['ident']['value']}")
-    save_reg(r)
+        try:
+            states = run_ops([(pid, p)], "apply")
+        except SystemExit as e:
+            p["status"] = "failed"
+            event(r, "failed", pid, type=p["type"], host=p["host"], detail=str(e)[-300:])
+            save_reg(r)
+            print(f"실패 {pid} {p['type']} {p['host']} — recall {pid}로 정리\n{e}")
+            continue
+        bad = [x for x in states.get(pid, []) if x[2] == "failed"]
+        p["status"] = "failed" if bad else "active"
+        event(r, "placed" if not bad else "failed", pid, type=p["type"], host=p["host"], ident=p["ident"]["value"], states=states.get(pid))
+        save_reg(r)
+        print(f"{'배치' if not bad else '실패'} {pid} {p['type']} {p['host']} → {p['ident']['value']}")
 
 
 def cmd_verify(a):
@@ -213,6 +241,12 @@ def cmd_verify(a):
     live = [(pid, p) for pid, p in r["placements"].items() if p["status"] == "active"]
     states = run_ops(live, "check")
     drift = [pid for pid, st in states.items() if any(s == "drift" for _, _, s in st)]
+    reopen = [pid for pid, st in states.items() if any(s == "gone" for _, _, s in st) and pid not in drift]
+    if reopen:  # 잊힌 세션은 재부팅으로 사라지는 게 자연스럽다 → 경보 없이 "다시 열린 세션"으로
+        run_ops([(pid, r["placements"][pid]) for pid in reopen], "apply")
+        for pid in reopen:
+            event(r, "reopened", pid)
+        print(f"세션 다시 엶 {len(reopen)}개")
     for pid in drift:
         p = r["placements"][pid]
         bad = [f"{h}#{i}" for h, i, s in states[pid] if s == "drift"]
@@ -221,6 +255,11 @@ def cmd_verify(a):
         run_ops([(pid, r["placements"][pid]) for pid in drift], "apply")
         for pid in drift:
             event(r, "restored", pid)
+    known = [op["line"] for p in r["placements"].values() if p["status"] == "active" for op in p["ops"] if op["kind"] == "decoy_key"]
+    for d in inventory().get("decoys", []):
+        aud = _run({d: [{"kind": "decoy_audit", "user": "backup", "known": known}]}, {d: [("audit", 0)]}, "check")
+        if any(x[2] == "drift" for x in aud.get("audit", [])):
+            alert(event(r, "orphan", "-", host=d, detail="authorized_keys에 레지스트리에 없는 키(옵션 없는 일반 키) — 자동 삭제 안 함"))
     print(f"검사 {len(live)}개, 드리프트 {len(drift)}개" + (" → 복구함" if drift else ""))
     save_reg(r)
 
@@ -244,7 +283,7 @@ def cmd_rotate(a):
 
 def cmd_recall(a):
     r = load_reg()
-    targets = [pid for pid, p in r["placements"].items() if p["status"] == "active"
+    targets = [pid for pid, p in r["placements"].items() if p["status"] in ("active", "failed", "pending")
                and (a.all or pid in a.ids or (a.host and p["host"] == a.host))]
     run_ops([(pid, r["placements"][pid]) for pid in targets], "absent")
     for pid in targets:

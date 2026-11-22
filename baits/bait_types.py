@@ -46,7 +46,9 @@ class EnvDbUrl:
                     continue  # 앱이 PostgreSQL을 쓰지 않으면 PG 미끼는 어색하다
                 for k in ef["keys"]:
                     m = re.match(r"^([A-Z]+)_DB_URL$", k["key"])
-                    if m and k["empty"]:  # 비어 있는 "꺼진 기능"의 DB 주소 — 채워 두면 남은 설정처럼 보인다
+                    # 비어 있는 "꺼진 기능"의 DB 주소 — 채워 두면 남은 설정처럼 보인다.
+                    # 이미 디코이를 가리키면 내 미끼가 차지한 같은 자리(맥락이 사라진 게 아님 — 11/22 오판)
+                    if m and (k["empty"] or k.get("host") == DECOY):
                         out.append({"path": ef["path"], "key": k["key"], "prefix": m.group(1), "service": svc["name"],
                                     "owner": svc["user"], "scheme": main["scheme"], "db": main.get("db") or "postgres",
                                     "main_host_in_etc_hosts": ctx["resolution"].get(main.get("host"), {}).get("in_etc_hosts", False),
@@ -103,8 +105,7 @@ class SshConfig:
             # 나가는 ssh를 쓰는 흔적만 센다. ~/.ssh에 authorized_keys만 있으면 "들어오는" 계정일 뿐(11/22: ubuntu 오판)
             uses_ssh = (u["known_hosts"] or u["keys"] or u["ssh_config"]
                         or (u["history"] and any(c in u["history"]["top"] for c in ("ssh", "scp", "rsync"))))
-            already = u["ssh_config"] and DECOY in " ".join(u["ssh_config"]["hosts"])
-            if uses_ssh and not already:
+            if uses_ssh:  # 이미 디코이 Host가 있으면 내 미끼 자리 — 같은 자리로 낸다
                 ids = (u["ssh_config"] or {}).get("identity_files", []) + u["keys"]
                 keyname = "id_ed25519_backup" if any(k.startswith("id_") for k in ids) or not ids else "backup_ed25519"
                 out.append({"user": u["name"], "home": u["home"], "uid": u["uid"], "gid": u["gid"], "keyname": keyname,
@@ -168,7 +169,7 @@ class AwsProfile:
                 for u in shell_users(ctx)
                 # aws를 실제로 쓰는 계정: 그 계정의 cron(또는 cron이 부르는 스크립트)이 aws를 부른다.
                 # ~/.aws만 있는 것은 근거가 약하다(로컬 VM root의 CloudWatch 에이전트 자격증명 — 11/22 오판)
-                if u["cron_uses_aws"] and self.PROFILE not in u["aws"]["profiles"]]
+                if u["cron_uses_aws"]]  # 이미 backup-legacy가 있으면 내 미끼 자리
 
     def new_ident(self, a, used):
         # 로컬: 형식만 맞춘 값. AWS(11/28): IAM 사용자 backup-legacy의 실제 액세스 키(권한 없음)로 교체
@@ -183,4 +184,74 @@ class AwsProfile:
                  "group": str(a["gid"]), "mtime": ts(a["cred_mtime"]) or made}]
 
 
-TYPES = {t.name: t for t in (EnvDbUrl(), SshConfig(), History(), AwsProfile())}
+# ------------------------------------------------------------------ T4형: 잊힌 tmux 세션의 ssh-agent(메모리에만 있는 키)
+class AgentSession:
+    name = "agent_session"
+
+    def match(self, ctx, host):
+        if not ctx["tools"].get("tmux") or not ctx["tools"].get("ssh-agent"):
+            return []
+        # 사람이 일하던 계정(히스토리)이고 나가는 ssh를 쓰는 계정 — SSH 미끼와 같은 맥락
+        return [{"user": u["name"], "host": host} for u in shell_users(ctx)
+                if u["name"] != "root" and u["history"] and u["history"]["lines"] >= 20
+                and (u["known_hosts"] or u["keys"] or u["ssh_config"])]
+
+    def new_ident(self, a, used, dest=None):
+        priv, pub, fp = keygen(f"{a['user']}@{a['host']}")
+        return {"kind": "ssh_key", "value": fp, "private": priv, "public": pub}
+
+    def ops(self, a, ident, dest):
+        return [{"kind": "agent_session", "user": a["user"], "session": "0", "fingerprint": ident["value"], "private": ident["private"],
+                 "reboot_ok": True},
+                {"kind": "decoy_key", "decoy": DECOY, "user": "backup", "line": ident["public"]}]
+
+
+# ------------------------------------------------------------------ T5형: 꺼진 기능의 멈춘 동기화 서비스(환경변수)
+class SyncService:
+    name = "sync_service"
+    POOL = ["sync_svc", "report_sync", "rpt_sync"]
+    SCRIPT = """#!/usr/bin/env python3
+# {feature} 사본 동기화 (2024-07). {flag}=false 이면 대기만 한다.
+import os, time, logging
+logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
+log = logging.getLogger("{name}")
+while True:
+    if os.environ.get("{flag}", "false").lower() != "true":
+        time.sleep(3600)
+        continue
+    log.info("sync start")
+    time.sleep(int(os.environ.get("SYNC_INTERVAL", "86400")))
+"""
+
+    def match(self, ctx, host):
+        out = []
+        for svc in ctx["services"]:
+            for ef in svc["env_files"]:
+                keys = {k["key"]: k for k in ef["keys"]}
+                for k in ef["keys"]:
+                    m = re.match(r"^([A-Z]+)_ENABLED$", k["key"])
+                    if m and f"{m.group(1)}_DB_URL" in keys:  # 꺼진 기능 플래그 + 그 기능의 DB 주소 = 그 기능용 작업이 있었을 법함
+                        p = m.group(1).lower()
+                        main = keys.get("DATABASE_URL", {})
+                        out.append({"prefix": m.group(1), "name": f"{p}-sync", "flag": k["key"], "env_file": ef["path"],
+                                    "user": svc["user"] or "root", "scheme": main.get("scheme", "postgresql"),
+                                    "db": main.get("db") or "postgres", "host": host})
+        return out
+
+    def new_ident(self, a, used, dest=None):
+        n = next((x for x in self.POOL if x not in used), f"sync_{secrets.token_hex(2)}")
+        return {"kind": "db_user", "value": n, "password": pw()}
+
+    def ops(self, a, ident, dest):
+        made = ts(time.mktime((2024, 7, 8, 16, 20, 5, 0, 0, -1)))
+        url = f"{a['scheme']}://{ident['value']}:{ident['password']}@{DECOY}:5432/{a['db']}"
+        unit = (f"[Unit]\nDescription={a['prefix'].lower()} copy sync\nAfter=network-online.target\n\n[Service]\nUser={a['user']}\n"
+                f"EnvironmentFile={a['env_file']}\nEnvironment=SYNC_DB_URL={url}\nEnvironment=SYNC_INTERVAL=86400\n"
+                f"ExecStart=/usr/bin/python3 /usr/local/bin/{a['name']}\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
+        script = self.SCRIPT.format(feature=a["prefix"].lower(), flag=a["flag"], name=a["name"])
+        return [{"kind": "file", "path": f"/usr/local/bin/{a['name']}", "content": script, "mode": "0755", "owner": "root", "group": "root", "mtime": made},
+                {"kind": "file", "path": f"/etc/systemd/system/{a['name']}.service", "content": unit, "mode": "0644", "owner": "root", "group": "root", "mtime": made},
+                {"kind": "unit", "name": f"{a['name']}.service", "mtime": made}]
+
+
+TYPES = {t.name: t for t in (EnvDbUrl(), SshConfig(), History(), AwsProfile(), AgentSession(), SyncService())}
