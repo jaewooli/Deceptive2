@@ -17,6 +17,9 @@ systemctl stop systemd-nspawn@$NAME 2>/dev/null || true
 "${NS[@]}" bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get -y -q full-upgrade &&
   apt-get install -y -q nginx postgresql-16 python3-venv auditd clamav unattended-upgrades logrotate cron >/dev/null'
 
+# ---- sshd: EC2 클라우드 이미지 기본값과 같게(debootstrap 기본은 비밀번호 인증을 받아 E1 단서 — 11/22)
+printf 'PasswordAuthentication no\n' > "$ROOT/etc/ssh/sshd_config.d/60-cloudimg-settings.conf"
+
 # ---- 계정: EC2 기본 ubuntu + 앱 계정 deploy(web-01과 같은 이름 규칙)
 "${NS[@]}" bash -c 'id ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash -u 1000 -G sudo,adm ubuntu
   id deploy >/dev/null 2>&1 || useradd -m -s /bin/bash -u 1001 deploy'
