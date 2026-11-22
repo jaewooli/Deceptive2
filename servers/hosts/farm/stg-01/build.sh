@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # stg-01 — 옛 스테이징 서버(재구축 때 확인 없이 같이 옮긴 옛 서버, docs/02-infra-design.md 4절) 컨테이너 루트파일시스템.
 # 팜에서 root로. 1단계: Ubuntu 24.04 기본 + 접속 서비스. 역할(nginx→gunicorn·PostgreSQL·옮겨 온 데이터)은 role.sh
-#   sudo ./build.sh <투영 주소/접두> <게이트웨이> [DNS]
+#   sudo ./build.sh <투영 주소/접두> <게이트웨이> [DNS] [투영 ENI MAC]
 set -euo pipefail
 ADDR=${1:?투영 주소/접두}; GW=${2:?게이트웨이}; DNS=${3:-}
 NAME=stg-01
@@ -33,9 +33,13 @@ ln -sf /usr/share/zoneinfo/Asia/Seoul "$ROOT/etc/localtime"; echo Asia/Seoul > "
 
 # 컨테이너 NIC(host0): 투영 주소, 게이트웨이 .1
 install -d "$ROOT/etc/systemd/network"
+# 투영 디코이의 NIC MAC = 투영 ENI(센서) MAC — 다르면 디코이 안 `ip link`가 이웃 ARP 값과 어긋남(11/23 실측). MAC은 4번째 인자
 cat > "$ROOT/etc/systemd/network/10-host0.network" <<EOF
 [Match]
 Name=host0
+
+[Link]
+${4:+MACAddress=$4}
 
 [Network]
 Address=$ADDR

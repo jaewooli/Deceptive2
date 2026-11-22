@@ -115,5 +115,9 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 ## 9. 투영과 ARP·DHCP·브로드캐스트 (11/23 실측)
 - **ARP**: 발견됨. web-01의 `ip neigh`에 투영 주소 10.0.20.30이 **센서 MAC**(52:54:00:20:00:30)으로 보인다(로컬은 센서 proxy ARP, AWS는 하이퍼바이저가 ENI IP에 대해 답함)
 - **DHCP·브로드캐스트·멀티캐스트**(NetBIOS·LLMNR·mDNS·net view): VPC가 전달하지 않아 진짜 서버도 이 방법으론 발견 안 됨 → 단서 아님. L2를 못 써서 잃는 발견 경로는 VPC엔 없다
-- **새 단서(L3 구현의 대가)**: 디코이 안에서 `ip link`를 보면 자기 NIC MAC이 무작위 veth MAC(da:b6:…)이라 ① 이웃의 ARP 값(센서 MAC)과 다르고 ② AWS ENI MAC답지 않다 → **시도: 컨테이너 host0 MAC을 센서(투영 ENI) MAC으로 맞춤** — 결과: 투영 접속 "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.20" (라이브로 nsenter `ip link set host0 address`, 영구 반영은 farm install.sh의 컨테이너 networkd 파일 `[Link] MACAddress=`로 — 다음 세션)
+- **새 단서(L3 구현의 대가)**: 디코이 안에서 `ip link`를 보면 자기 NIC MAC이 무작위 veth MAC(da:b6:…)이라 ① 이웃의 ARP 값(센서 MAC)과 다르고 ② AWS ENI MAC답지 않다 → **시도: 컨테이너 host0 MAC을 센서(투영 ENI) MAC으로 맞춤** — 결과: 투영 접속 "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.20
+" (라이브로 nsenter `ip link set host0 address`, 영구 반영은 farm install.sh의 컨테이너 networkd 파일 `[Link] MACAddress=`로 — 다음 세션)
 - **여러 디코이를 센서 하나(ENI 하나)로 투영하면 서로 다른 "서버"가 같은 MAC**으로 ARP 캐시에 보인다(다중 주소 때와 같은 묶임) → 투영 디코이마다 ENI를 따로(t3.small ENI 3개 = 관리 1 + 투영 최대 2) — 8절 1번 여러 구간 계획에 반영할 것
+
+## 10. 다음 세션 첫 지시 (11/23 사용자)
+**8절 투영 확장 1~4를 "마저 구현"하는 것이 사용자가 원한 일이다**(기록만 하라는 뜻이 아님). 11/22 세션은 컨텍스트 소진으로 구현하지 못하고 기록만 함. 순서: 사용자에게 8절의 결정 2개(추가 디코이 역할, 4절 2번 A/B/C)를 먼저 묻고 → 1 여러 구간(센서 ENI 분리, 9절 MAC 묶임 반영) → 2 디코이 여러 개(트랩 build.sh 방식 클라우드 이미지) → 3 규칙 기반 블렌딩 → 4 미끼 엔진 `projection` 유형. 각각 공격자 시점 검사 먼저, 끝나면 학습 로그. 6절 검사 3겹과 순서는 사용자에게 확인
