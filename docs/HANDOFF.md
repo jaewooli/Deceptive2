@@ -73,7 +73,13 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 11. **병행 세션 브랜치** `worktree-bridge-cse_01X8XEfnVcaGyqMxdt6nUcCs`(시계를 2024-06으로 돌린 골든 디스크, 미병합) — 사용자 결정: **재구축 서사 유지, 병합 안 함**, 건드리지 않음. 다른 worktree `…fo917…`는 커밋 없음. 작업 전 `git worktree list`·ListAgents로 병행 세션 확인
 
 ## 5. 다음에 할 일
-- **바로 다음**: 원래 일정 11/25분(디코이 SSH·DB **목적지 탐지**: moa-notify sshd 감시·미끼 키 지문 A/B·DB 계정, sshd VERBOSE 공통) + **축소 감사 4번 디코이 행동 기록**(Attivo·IllusionBLACK: 세션 전체·반입 도구 수집 — 벤더 원문 먼저, 컨테이너 auditd 불가 문제와 묶임)
+- **바로 다음 ①: 검사 3겹 만들기 `infra/checks/`(11/23 사용자 승인)** — 11/22 장애 대부분은 사람이 디버깅하기 전에 걸렸을 것
+  1. 정적 검사(`infra/checks/static.sh`): shellcheck(servers/·infra/·validation/ 셸 — pipefail+grep -q 같은 실수), `nft -c -f`(규칙 문법), `systemd-analyze verify`(유닛), `netplan generate`, **직접 만든 린터**: ① 운영 서버용 코드에 `ip rule del pref 0`·local 규칙 이동 금지 ② 스크립트가 `dev X` 경로를 걸면 그 유닛에 `After=X`가 있거나 X의 PostUp 안이어야 함(부팅 순서) ③ `ip rule`·`ip route`를 거는 서버엔 `networkd.conf.d/10-keep-foreign.conf`가 같이 있어야 함 ④ `lab.sh` 메모리 합계 ≤ 호스트 RAM 55% ⑤ 서버에 올라가는 파일에 프로젝트 용어 없음
+  2. 경로 단언(`infra/checks/paths.sh`, 배포·재부팅 뒤 자동): 설계한 경로마다 각 홉에서 `ip route get <dst> from <src> iif <if>`가 기대 장치인지(예: farm `10.0.20.11 from 10.0.20.30 iif ve-stg-01` → `relay`, EDH `169.254.200.1` → `wg0`), 터널 경로의 양방향 MSS 조정 존재·카운터>0, local 규칙(pref 0) 존재. 트래픽 없이 몇 초
+  3. 공격자 시점 검사: 기존 진정성 검증 세트 + 기능별 스모크(트랩 `CLIENT LIST` 주소, 투영 SSH 끝까지, 미끼 연결 `ss -tan`, 관문 페이로드 경보)
+  + 미끼 엔진 단위 테스트(`baits/tests/`: 히스토리 덩어리 삽입·회수가 원래 줄을 안 지움, plan 중복 거름, 자기 미끼 자리 인식, 회수 뒤 빈 파일 삭제)
+  - 정적으로 못 잡는 것: 응용 계층 단서(Redis CLIENT LIST·커널 버전) → 3번, 실행 중 경로표 상태(부팅 순서 결과) → 2번
+- **바로 다음 ②**: 원래 일정 11/25분(디코이 SSH·DB **목적지 탐지**: moa-notify sshd 감시·미끼 키 지문 A/B·DB 계정, sshd VERBOSE 공통) + **축소 감사 4번 디코이 행동 기록**(Attivo·IllusionBLACK: 세션 전체·반입 도구 수집 — 벤더 원문 먼저, 컨테이너 auditd 불가 문제와 묶임)
 - 남은 축소 감사 항목과 원래 일정 매핑: 9 tar-pit·10 출발지 포렌식 → 11/27 / 8 자동 격리 → 12/1 / 7 노출 제거(자동 탐색) → 12/2 / 5 자동 블렌딩·6 Deflect → 새 범위, 마감 영향 보고 사용자 결정 / NAT 구조 → 11/28(CLAUDE.md 규칙이라 사용자 결정)
 - 원래 일정: 11/26 결과 기반 감시 P0, 11/27 경보·상관분석·포렌식, **11/28 AWS 일괄 구축**(위 8·9 포함), 11/29 EC2 재측정·기준선, 11/30~12/2 오탐·시나리오, 12/3~4 보고서
 - 블로그 진행 글(티스토리): 사용자 확인 필요(CLAUDE.md)
