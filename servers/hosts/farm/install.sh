@@ -27,6 +27,11 @@ Address = 10.200.0.2/30
 ListenPort = 51820
 Table = off
 MTU = 1380
+# 컨테이너 응답 경로는 터널 수명 주기에 묶는다 — 컨테이너 시작 스크립트에 두면 터널보다 먼저 돌아 경로표가 비고,
+# 응답이 같은 LAN으로 바로 나가 터널을 우회한다(MSS 조정을 못 받아 큰 패킷이 터널 MTU에서 버려짐 — 11/23 SSH 키 교환 멈춤)
+PostUp = ip route replace default dev %i table $T_OUT
+PostUp = ip rule show pref 50 | grep -q . || ip rule add pref 50 iif $VETH lookup $T_OUT
+PostUp = iptables -t mangle -C FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 
 [Peer]
 PublicKey = $SENSOR_PUB
@@ -67,12 +72,14 @@ sysctl -q -w net.ipv4.conf.$VETH.rp_filter=2 2>/dev/null
 ip route replace $X/32 dev $VETH
 # 컨테이너 경로가 빠지면 LAN으로 새지 않고 버린다(farm과 센서가 같은 망이면 루프 — 11/22)
 ip route replace blackhole $X/32 metric 1000 2>/dev/null
-ip rule show pref 50 | grep -q . || ip rule add pref 50 iif $VETH lookup $T_OUT
-ip route replace default dev relay table $T_OUT
+# 응답 경로(table $T_OUT)·규칙은 wg-quick@relay PostUp이 건다
 exit 0
 EOF
 chmod 755 /usr/local/lib/relay/veth-up
 cat > /etc/systemd/system/systemd-nspawn@"$NAME".service.d/relay.conf <<EOF
+[Unit]
+After=wg-quick@relay.service systemd-networkd.service
+Wants=wg-quick@relay.service
 [Service]
 ExecStartPost=/usr/local/lib/relay/veth-up
 EOF

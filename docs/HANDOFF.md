@@ -57,9 +57,10 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 | 미끼 엔진 버그들 | 원래 히스토리 exit 줄 삭제, 고아 미끼, "맥락 사라짐" 오판, 중복 배치, PATH, 규칙 오판 3개 | 덩어리 단위 삽입, pending 먼저 기록, 자기 미끼 자리 인식, plan 중복 거름, 2단계 적용, 목적지 감사 |
 | QEMU LAN | socket listen/connect 한 방향만 | 멀티캐스트 공유 LAN |
 | 정책 규칙이 ARP까지 가로챔 | 센서 local 앞 규칙 | proxy ARP(로컬 L2용, NIC에 IPv4 하나 필요) |
+| **투영 경로 SSH가 키 교환(`KEX_ECDH_REPLY`)에서 멈춤**(배너·작은 HTTP는 됨) — 11/23 | farm 컨테이너 시작 스크립트가 relay 터널보다 먼저 돌아 응답 경로표(120)가 비었음 → 컨테이너 응답이 main을 타고 **같은 LAN으로 바로** 나가 터널을 우회 → 센서의 SYN-ACK MSS 조정(1340)을 못 받아 클라이언트가 MSS 1460으로 큰 세그먼트를 보냄 → 터널 MTU 1380에서 버려짐. 센서는 그 LAN 주소가 없어 ICMP frag-needed도 제대로 못 돌려줌(PMTU 블랙홀). 단서: 센서 `-i relay` MSS 규칙 0건, farm `ip route get … iif ve-stg-01` = enp0s3 | 응답 경로·규칙·MSS 조정을 `wg-quick@relay` PostUp으로(터널 수명 주기), 컨테이너 유닛 `After=wg-quick@relay`. **교훈: 경로가 비면 조용히 우회한다 — 터널을 쓰는 경로는 터널이 있어야만 존재하게** |
 
 ## 4. 열린 문제 (해결해야 할 것, 우선순위 순)
-1. **[새로 발견, 미해결] 투영 경로로 stg-01에 SSH하면 키 교환에서 멈춤** — `expecting SSH2_MSG_KEX_ECDH_REPLY`. 같은 경로로 SSH 배너·HTTP(2,765B)는 됨. farm에서 직접 붙으면 정상(`Invalid user … [preauth]`까지). 센서 재설계(투영 주소를 자기 주소로 안 둠, 6f25aeb) 뒤에 생긴 것으로 추정. 의심: 큰 패킷·PMTU(터널 MTU 1380, 센서에 양방향 MSS 1340 넣어도 그대로), 또는 센서의 응답 경로(table 111). 확인: 센서·farm에서 tcpdump로 큰 세그먼트가 어디서 사라지는지. stg-01 sshd에 `[accepted]`·`[net]` 상태로 걸린 preauth 프로세스가 남아 있음(MaxStartups 3/10)
+1. ~~투영 경로로 stg-01에 SSH하면 키 교환에서 멈춤~~ → **11/23 해결**(아래 3절 표 마지막 줄). 지금은 SSH가 끝까지 진행, 인증 방법 `publickey`만(app-01과 같음)
 2. **farm 디코이 종류 결정 대기**(사용자): A 컨테이너 유지 + 고칠 수 있는 것만 / B metal 인스턴스 VM(벤더 방식) / C EC2 인스턴스. 컨테이너 한계: `systemd-detect-virt`=systemd-nspawn(B7), auditd 불가(D4 audit 0) → 트랩·stg-01 안에선 세션 명령 기록(4번)도 안 됨
 3. stg-01 루트파일시스템이 debootstrap이라 EC2 이미지와 패키지·서비스가 다름(D2·D3) → 트랩처럼 공식 클라우드 이미지 tarball로 다시(`servers/hosts/farm/trap/build.sh` 방식)
 4. farm 커널을 EDH와 같은 패치·재부팅 주기로(트랩 Redis `INFO os`에 farm 커널이 보임: 147 vs EDH 149)
@@ -72,7 +73,7 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 11. **병행 세션 브랜치** `worktree-bridge-cse_01X8XEfnVcaGyqMxdt6nUcCs`(시계를 2024-06으로 돌린 골든 디스크, 미병합) — 사용자 결정: **재구축 서사 유지, 병합 안 함**, 건드리지 않음. 다른 worktree `…fo917…`는 커밋 없음. 작업 전 `git worktree list`·ListAgents로 병행 세션 확인
 
 ## 5. 다음에 할 일
-- **바로 다음**: 4절 1번(투영 SSH) 해결 → 원래 일정 11/25분(디코이 SSH·DB **목적지 탐지**: moa-notify sshd 감시·미끼 키 지문 A/B·DB 계정, sshd VERBOSE 공통) + **축소 감사 4번 디코이 행동 기록**(Attivo·IllusionBLACK: 세션 전체·반입 도구 수집 — 벤더 원문 먼저, 컨테이너 auditd 불가 문제와 묶임)
+- **바로 다음**: 원래 일정 11/25분(디코이 SSH·DB **목적지 탐지**: moa-notify sshd 감시·미끼 키 지문 A/B·DB 계정, sshd VERBOSE 공통) + **축소 감사 4번 디코이 행동 기록**(Attivo·IllusionBLACK: 세션 전체·반입 도구 수집 — 벤더 원문 먼저, 컨테이너 auditd 불가 문제와 묶임)
 - 남은 축소 감사 항목과 원래 일정 매핑: 9 tar-pit·10 출발지 포렌식 → 11/27 / 8 자동 격리 → 12/1 / 7 노출 제거(자동 탐색) → 12/2 / 5 자동 블렌딩·6 Deflect → 새 범위, 마감 영향 보고 사용자 결정 / NAT 구조 → 11/28(CLAUDE.md 규칙이라 사용자 결정)
 - 원래 일정: 11/26 결과 기반 감시 P0, 11/27 경보·상관분석·포렌식, **11/28 AWS 일괄 구축**(위 8·9 포함), 11/29 EC2 재측정·기준선, 11/30~12/2 오탐·시나리오, 12/3~4 보고서
 - 블로그 진행 글(티스토리): 사용자 확인 필요(CLAUDE.md)
