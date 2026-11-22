@@ -5,7 +5,7 @@
 | `base/` 공통(한 벌, 변경 A) | ✓ | ✓ | ✓ |
 | `hosts/<호스트>/` 역할 | — | PostgreSQL, 백업 cron | sshd, rsync, `backup` 계정, 옛 덤프, DB 5432 |
 | `webapp/` (`deploy/` 포함) | 앱, nginx, systemd | — | — |
-| `baits/` 미끼 | T1~T5, T7 | T6 | — |
+| (미끼는 `../baits/` 엔진이 규칙으로 배치 — 서버에 올리는 폴더 아님, 11/22) | | | |
 | `detection/` 호스트 쪽 탐지 룰 | ✓ | ✓ | ✓ |
 
 - 세 서버는 같은 베이스에서 출발하고 **차이는 역할에서만** 둔다(`docs/02-infra-design.md` 2절). 공통 설정을 `hosts/`에 복사하지 않는다(사본이 어긋나면 디코이 전용 흔적)

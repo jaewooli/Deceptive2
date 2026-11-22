@@ -1,0 +1,9 @@
+# 서버 맥락 수집(읽기 전용). engine.py collect가 부른다
+- hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: 맥락
+      ansible.builtin.script: ../collect_context.py
+      register: ctx
+      changed_when: false

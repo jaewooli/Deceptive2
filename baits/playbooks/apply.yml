@@ -1,0 +1,19 @@
+# 미끼 작업 적용·검사·회수. engine.py가 부른다(직접 실행하지 않음)
+#   -e @ops.json  (ops_by_host: {호스트: [작업...]}, op_mode: apply|check|absent)
+- hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: 작업 파일(root 0600, 내용은 인자로 넘기지 않음)
+      ansible.builtin.copy:
+        content: "{{ ops_by_host[inventory_hostname] | to_json }}"
+        dest: "/root/.{{ 99999999 | random | string }}.json"
+        mode: "0600"
+      register: opsfile
+      no_log: true
+      when: inventory_hostname in ops_by_host
+    - name: 적용기
+      ansible.builtin.script: "../apply_ops.py {{ opsfile.dest }} {{ op_mode }}"
+      register: applied
+      changed_when: false
+      when: inventory_hostname in ops_by_host
