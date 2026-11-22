@@ -69,6 +69,7 @@ sec A9
 if [ -d /backup/dumps ]; then
   echo "count=$(find /backup/dumps -type f | wc -l)"
   find /backup/dumps -type f -printf '%TY-%Tm-%Td %s %f\n' | sort | sed -n '1p;$p'
+  echo "months=$(find /backup/dumps -type f -printf '%TY-%Tm\n' | sort | uniq -c | awk '{printf "%s:%s ", $2, $1}')"
 else echo "/backup/dumps 없음"; fi
 df -hT -x tmpfs -x devtmpfs -x squashfs -x overlay 2>/dev/null
 
@@ -86,7 +87,7 @@ head -n 1 /var/log/cloud-init.log 2>/dev/null | cut -c1-80
 sec B2
 for f in /var/log/auth.log /var/log/syslog; do
   [ -f "$f" ] || continue
-  echo "$f utc=$(grep -cE '^[0-9T:.-]+\+00:00' "$f") kst=$(grep -cE '^[0-9T:.-]+\+09:00' "$f") first=$(head -c 32 "$f")"
+  echo "$f utc=$(grep -cE '^[0-9T:.-]+\+00:00' "$f") kst=$(grep -cE '^[0-9T:.-]+\+09:00' "$f") utc_after_kst=$(awk '/^[0-9T:.-]+\+09:00/{k=1} k && /^[0-9T:.-]+\+00:00/{n++} END{print n+0}' "$f") first=$(head -c 32 "$f")"
 done
 
 sec B3
@@ -108,8 +109,11 @@ ts /etc/cloud/build.info /var/log/installer 2>/dev/null
 sec C1
 for h in $(homes); do
   d=${h#*:}; f=$d/.ssh/known_hosts
-  [ -f "$f" ] && echo "${h%%:*} known_hosts=$(grep -c . "$f") mtime=$(stat -c %y "$f" | cut -d. -f1)"
+  [ -f "$f" ] || continue
+  echo "${h%%:*} known_hosts=$(grep -c . "$f") mtime=$(stat -c %y "$f" | cut -d. -f1)"
+  ssh-keygen -F db-backup-01 -f "$f" 2>/dev/null | grep -v '^#' | awk '{print $2, $3}' | ssh-keygen -lf - 2>/dev/null | awk -v u="${h%%:*}" '{print "kh", u, $2}'
 done
+for k in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$k" | awk '{print "hostkey", $2}'; done
 echo "-- Accepted 로그인 출발지"
 zc /var/log/auth.log* | grep -oE 'Accepted \S+ for \S+ from \S+' | awk '{print $4, $6}' | sort | uniq -c
 
@@ -139,6 +143,8 @@ else echo "psql 없음"; fi
 sec C6
 ls -l --time-style=+%F /etc/rsyncd.conf 2>/dev/null || echo "rsyncd.conf 없음"
 echo "rsync $(systemctl is-enabled rsync 2>/dev/null) $(systemctl is-active rsync 2>/dev/null)"
+for h in $(homes); do f=${h#*:}/.ssh/authorized_keys; [ -f "$f" ] && echo "rrsync_keys ${h%%:*}=$(grep -c 'rrsync' "$f")"; done
+ls -l --time-style=+%F /etc/cron.d/backup-dumps 2>/dev/null
 
 # ---------------- D. 감시 흔적 (app-01과 같아야 함)
 sec D1

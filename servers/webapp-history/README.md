@@ -6,7 +6,7 @@
 python3 servers/webapp-history/build_history.py --out /tmp/srv-app
 ```
 
-- 시간표: 운영 시작 2024-03 → S3 전환 2025-09(`docs/02-infra-design.md` 4절). 커밋 15개, 작성자 가상 2명(`@moayeyak.example`)
+- 시간표: 개발 시작 2024-03 → 서버 구축·운영 시작 2024-06 → S3 전환 2025-09 → 서버 재구축 2026-11(`docs/02-infra-design.md` 4절). 2024-06 전 커밋은 출시 전 개발. 재구축 때 `/srv/app`은 `rsync -a`로 옮겨 파일 시각 유지. 커밋 15개, 작성자 가상 2명(`@moayeyak.example`)
 - 2024-07 월간 리포트가 백업 서버 DB 사본(`report_ro@db-backup-01`)을 읽도록 추가 → 2025-09 S3 전환으로 끔. T1(`/srv/app/.env`의 남은 `REPORT_DB_URL`, 11/26)의 맥락. T1 실제 값의 계정·DB 이름을 이 이력과 맞출 것
 - 의존성: 커밋 날짜 이전에 PyPI에 나온 최신 정식 버전(`pypi-release-dates.json`, 2026-11-20 조회 스냅숏). 현재 고정 버전 중 SQLAlchemy 2.1.9가 2026-11-16 배포라 마지막 의존성 커밋은 2026-11-18. 고정 버전을 바꾸면 스냅숏 갱신 필요(도구가 날짜를 검사해 실패함)
 - **`receipt.py`는 실행 시점 내용 그대로** 2024-05-13 커밋에 들어간다. `build_receipt_pdf()`를 작성한 뒤 다시 실행하고, 새 패키지를 쓰면 `requirements.txt`·스냅숏에 추가

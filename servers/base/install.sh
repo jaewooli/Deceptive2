@@ -79,9 +79,17 @@ postgresql() {
   systemctl restart postgresql
 }
 
+# 재구축 때 옛 서버의 SSH 호스트 키를 함께 옮긴 상태(02-infra 4절, 세 서버 공통): 키 파일 시각을 첫 구축 시각으로
+#   sudo ./install.sh hostkeys "2024-06-12 14:21:37"
+hostkeys() {
+  local when=${1:?첫 구축 시각}
+  for f in /etc/ssh/ssh_host_*; do touch -h -d "$when" "$f"; done
+}
+
 case "${1:-base}" in
   base) base ;;
   agents) agents ;;
   postgresql) postgresql ;;
-  *) echo "사용법: $0 [base|agents|postgresql]" >&2; exit 2 ;;
+  hostkeys) hostkeys "${2:-}" ;;
+  *) echo "사용법: $0 [base|agents|postgresql|hostkeys <시각>]" >&2; exit 2 ;;
 esac

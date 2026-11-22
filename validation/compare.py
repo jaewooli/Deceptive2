@@ -14,7 +14,8 @@ import re
 import sys
 from datetime import date, timedelta
 
-START, CUT = "2024-03", "2025-09"          # 서사: 운영 시작 → S3 전환(이후 방치)
+START, CUT = "2024-06", "2025-09"          # 서사: 구축·운영 시작 → S3 전환(이후 방치) → 2026-11 재구축(11/22)
+LAUNCH, LAST_DUMP = "2024-06-14", "2025-09-15"  # 덤프 기간(make_carryover.py와 같음)
 TERMS = re.compile(r"\b(deceptive2?|honeypot|honeytoken|decoy|canary|cowrie|lure|bait)\b", re.I)
 
 
@@ -81,65 +82,76 @@ def after_cut(d):
     return bool(d) and d[:7] > CUT
 
 
+def rebuild(h):
+    """이 서버의 재구축일 = 첫 부팅 때 만들어지는 machine-id 날짜(EC2에선 IMDS pendingTime과 같은 날이어야 함)"""
+    return first_date(h["B5"])
+
+
+def ago(h, d, days):
+    return bool(d) and date.fromisoformat(d) >= h.now - timedelta(days=days)
+
+
 @rule("A1", "⏱")
 def a1(h, r):
-    rotated = any("/var/log/wtmp.1" in l for l in h["A1"])
+    rb = rebuild(h)
     begins = next((l for l in h["A1"] if l.startswith("wtmp begins")), "")
-    return ("ok", "wtmp 회전 1회 이상") if rotated else ("clue", f"wtmp 회전 0회 — 켠 지 한 달 안({begins})")
+    users = {l.split()[0] for l in h["A1"] if l and not l.startswith(("reboot", "wtmp", "-")) and len(l.split()) > 3}
+    if r == "decoy" and "backup" in users:
+        return "clue", "재구축 뒤 `backup` 로그인 기록이 있음"
+    return "ok", f"wtmp는 재구축({rb}) 뒤부터, 로그인 사용자 {sorted(users) or '없음'}"
 
 
 @rule("A2", "⏱", ("decoy",))
 def a2(h, r):
     line = next((l for l in h["A2"] if l.split()[:1] == ["backup"]), "")
-    if not line:
-        return "clue", "`backup` 로그인 기록 없음"
-    return ("ok", line.strip()) if "2025" in line else ("clue", f"날짜가 서사와 다름: {line.strip()}")
+    return ("clue", f"새 서버에 `backup` 로그인 기록: {line.strip()}") if line else ("ok", "`backup` 새 서버 로그인 없음(옛 lastlog는 안 옮김)")
 
 
 @rule("A3", "⏱", ("decoy",))
 def a3(h, r):
     line = next((l for l in h["A3"] if l.startswith("backup ")), "")
     if not line or "없음" in line:
-        return "clue", "`backup` 히스토리 없음(root·ubuntu도 없음)" if all("없음" in l for l in h["A3"] if not l.startswith("  ")) else "`backup` 히스토리 없음"
-    return "ok", line
+        return "clue", "`backup` 히스토리 없음"
+    m = re.search(r"mtime=(\S+)", line)
+    return ("ok" if m and m.group(1)[:7] == CUT else "clue"), line.split("  ")[0]
 
 
 @rule("A4", "⏱")
 def a4(h, r):
-    bad = []
-    month = h.now.strftime("%Y-%m")
-    for l in h["A4"]:
-        parts = l.split()
-        if len(parts) < 2:
-            continue
-        cnt = {p.rsplit(":", 1)[0]: int(p.rsplit(":", 1)[1]) for p in parts[1:]}
-        tot = sum(cnt.values())
-        if tot and cnt.get(month, 0) / tot > 0.5:
-            bad.append(f"{parts[0]} {cnt.get(month, 0)}/{tot}개가 {month}")
-    return ("clue", "; ".join(bad) + " — 하루·한 달에 몰림") if bad else ("ok", "기간에 퍼져 있음")
+    # 옮겨 온 홈(backup)은 옛 날짜에 퍼져 있어야 하고, 재구축 뒤 만든 관리자 홈(ubuntu·root)은 최근이어도 된다
+    if r != "decoy":
+        return "ok", "운영 서버 관리자 홈은 재구축 뒤 것(옮겨 온 서비스 계정 홈은 11/27 이후 확인)"
+    line = next((l for l in h["A4"] if l.startswith("backup ")), "")
+    if not line:
+        return "clue", "`backup` 홈 없음"
+    cnt = {p.rsplit(":", 1)[0]: int(p.rsplit(":", 1)[1]) for p in line.split()[1:]}
+    tot, old = sum(cnt.values()), sum(v for k, v in cnt.items() if START <= k <= CUT)
+    months = sorted(k for k in cnt if START <= k <= CUT)
+    ok = tot and old / tot >= 0.9 and len(months) >= 6
+    return ("ok" if ok else "clue"), f"`backup` 파일 {old}/{tot}개가 {START}~{CUT}, {len(months)}개 달에 퍼짐"
 
 
 @rule("A5", "⏱")
 def a5(h, r):
-    n = int(kv(h["A5"], "full_sets") or 0)
-    return ("ok", f".4.gz {n}개") if n else ("clue", f"꽉 찬 회전 세트(.4.gz) 0개, 회전 파일 {kv(h['A5'], 'rotated_files')}개 — weekly·rotate 4 기준 한 달 안")
+    rb = rebuild(h)
+    olds = [l[:10] for l in h["A5"] if re.match(r"\d{4}-\d{2}-\d{2} /var/log/", l)]
+    too_old = [d for d in olds if d[:7] < "2026-10"]
+    return ("clue", f"재구축 전 날짜의 시스템 로그: {too_old}") if too_old else ("ok", f"시스템 로그는 이미지 빌드·재구축({rb}) 뒤 것만(옛 로그는 안 옮김)")
 
 
 @rule("A6", "⏱")
 def a6(h, r):
-    first = first_date(h["A6"][1:2])
-    boots = kv(h["A6"], "boots")
-    if first and date.fromisoformat(first) < h.now - timedelta(days=30):
-        return "ok", f"첫 부팅 {first}, {boots}회"
-    return "clue", f"저널 첫 부팅 {first}(부팅 {boots}회) — 30일 안"
+    first, rb = first_date(h["A6"][1:2]), rebuild(h)
+    return ("ok" if first == rb else "clue"), f"저널 첫 부팅 {first}, 재구축(machine-id) {rb}"
 
 
 @rule("A7", "⏱")
 def a7(h, r):
-    first, runs = kv(h["A7"], "apt_first"), kv(h["A7"], "apt_runs")
-    if first and date.fromisoformat(first) <= h.now - timedelta(days=180):
-        return "ok", f"apt 이력 {first}부터 {runs}회"
-    return "clue", f"apt 이력 {first}~{kv(h['A7'], 'apt_last')} {runs}회, unattended 로그 {kv(h['A7'], 'unattended_runs')}개 — 이미지 빌드일부터 시작"
+    first, rb = kv(h["A7"], "apt_first"), rebuild(h)
+    serial = kv([l.replace(": ", "=") for l in h["B6"]], "serial")
+    img = f"{serial[:4]}-{serial[4:6]}-{serial[6:8]}" if serial else ""
+    ok = first and (not img or first >= img) and (not rb or first <= rb)
+    return ("ok" if ok else "clue"), f"apt 이력 {first}(이미지 빌드 {img}) ~ {kv(h['A7'], 'apt_last')}, {kv(h['A7'], 'apt_runs')}회"
 
 
 @rule("A8", "⏱")
@@ -152,81 +164,103 @@ def a8(h, r):
     return "clue", f"wtmp 재부팅 {reboots}회 ≠ 저널 부팅 {boots}회"
 
 
+def gfs_expected():
+    days, d = [], date.fromisoformat(LAUNCH)
+    while d <= date.fromisoformat(LAST_DUMP):
+        days.append(d)
+        d += timedelta(days=1)
+    keep, seen = set(days[-30:]), set()
+    for d in days:
+        if d.strftime("%Y-%m") not in seen:
+            seen.add(d.strftime("%Y-%m"))
+            keep.add(d)
+    out = {}
+    for d in keep:
+        out[d.strftime("%Y-%m")] = out.get(d.strftime("%Y-%m"), 0) + 1
+    return out
+
+
 @rule("A9", "⏱", ("decoy",))
 def a9(h, r):
     if any("없음" in l for l in h["A9"]):
         return "clue", "`/backup/dumps` 없음"
     rows = [l for l in h["A9"] if re.match(r"\d{4}-\d{2}-\d{2} \d+ ", l)]
     first, last = (rows[0][:10], rows[-1][:10]) if rows else ("", "")
-    ok = first[:7] == START and last[:7] == CUT
-    return ("ok" if ok else "clue"), f"{kv(h['A9'], 'count')}개 {first}~{last}"
+    got = {p.split(":")[0]: int(p.split(":")[1]) for p in kv(h["A9"], "months").split()}
+    want = gfs_expected()
+    bad = sorted(set(got) ^ set(want)) + [m for m in want if m in got and got[m] != want[m]]
+    msg = f"{kv(h['A9'], 'count')}개 {first}~{last}"
+    return ("clue", msg + f", 보존 정책과 다른 달: {bad}") if bad else ("ok", msg + ", 보존 정책(최근 30개 + 매월 첫 덤프)대로")
 
 
 @rule("A10", "⏱", ("decoy",))
 def a10(h, r):
     n = int(kv(h["A10"], "rsync_lines") or 0)
-    return ("ok", f"rsync 기록 {n}줄") if n else ("clue", "rsync 수신 기록 없음")
+    return ("clue", f"새 서버에 rsync 기록 {n}줄") if n else ("ok", "새 서버엔 rsync 수신 기록 없음(재구축 전에 멈춤)")
 
 
 @rule("B1", "⏱")
 def b1(h, r):
-    d = first_date(h["B1"])
+    d, rb = first_date(h["B1"]), rebuild(h)
     inst = sum(1 for l in h["B1"] if l.startswith("d"))
-    note = f"[로컬] cloud-init 인스턴스 {inst}개 — vm.sh가 켤 때마다 instance-id를 새로 만듦(11/22 고침)" if inst > 1 else ""
-    return ("clue" if after_cut(d) else "ok"), f"cloud-init 로그 {d}", note
+    note = f"[로컬] cloud-init 인스턴스 {inst}개 — vm.sh가 켤 때마다 instance-id를 새로 만들던 것(11/22 고침)" if inst > 1 else ""
+    return ("ok" if inst == 1 else "clue"), f"cloud-init {d}, 인스턴스 {inst}개(재구축 {rb})", note
 
 
 @rule("B2", "⏱")
 def b2(h, r):
-    mixed = []
+    late = []
     for l in h["B2"]:
-        m = re.match(r"(\S+) utc=(\d+) kst=(\d+)", l)
-        if m and int(m.group(2)) and int(m.group(3)):
-            mixed.append(f"{m.group(1).rsplit('/', 1)[-1]} UTC {m.group(2)}줄·KST {m.group(3)}줄")
-    return ("clue", ", ".join(mixed) + " — 첫 부팅~base 설치 전 줄이 UTC") if mixed else ("ok", "한 시간대")
+        m = re.match(r"(\S+) utc=(\d+) kst=(\d+) utc_after_kst=(\d+)", l)
+        if m and int(m.group(4)):
+            late.append(f"{m.group(1).rsplit('/', 1)[-1]} KST 뒤 UTC {m.group(4)}줄")
+    if late:
+        return "clue", ", ".join(late) + " — 시간대가 중간에 섞임"
+    return "ok", "UTC는 첫 부팅~시간대 설정 전에만(새로 띄운 서버라면 자연스러움)"
 
 
 @rule("B3", "⏱")
 def b3(h, r):
     d = next((l.split("=", 1)[1][:10] for l in h["B3"] if l.startswith("birth=")), "")
-    return ("clue" if after_cut(d) else "ok"), f"루트 파일시스템 생성 {d}"
+    rb = rebuild(h)
+    return ("ok" if d and rb and d <= rb else "clue"), f"루트 파일시스템 생성 {d}(AMI 빌드) ≤ 재구축 {rb}"
 
 
 @rule("B4", "⏱")
 def b4(h, r):
     d = first_date(h["B4"])
-    return ("clue" if after_cut(d) else "ok"), f"SSH 호스트 키 {d}"
+    return ("ok" if d[:7] == START else "clue"), f"SSH 호스트 키 {d}" + (" — 옮겨 온 키(첫 구축일)" if d[:7] == START else " — 재구축 때 새로 생긴 키(옮긴 서사와 다름)")
 
 
 @rule("B5", "⏱")
 def b5(h, r):
-    d = first_date(h["B5"])
-    return ("clue" if after_cut(d) else "ok"), f"machine-id·hostname {d}"
+    d, first = rebuild(h), first_date(h["A6"][1:2])
+    return ("ok" if d == first else "clue"), f"machine-id {d} = 첫 부팅 {first}"
 
 
 @rule("B6", "⏱")
 def b6(h, r):
     serial = kv([l.replace(": ", "=") for l in h["B6"]], "serial")
-    d = f"{serial[:4]}-{serial[4:6]}-{serial[6:8]}" if serial else ""
     if not serial:
         return "ok", "build.info 없음"
-    return ("clue" if d[:7] > START else "ok"), f"이미지 빌드 serial {serial}"
+    img, rb = f"{serial[:4]}-{serial[4:6]}-{serial[6:8]}", rebuild(h)
+    return ("ok" if img <= rb else "clue"), f"이미지 빌드 {img} ≤ 재구축 {rb}"
 
 
 @rule("C1", "↔", ("decoy",))
 def c1(h, r, app=None):
-    login = any(re.search(r"\bbackup\b", l) for l in h["C1"] if not l.startswith("--"))
-    kh = any("known_hosts" in l for l in app["C1"]) if app else False
-    if login and kh:
-        return "ok", "디코이 backup 로그인 ↔ app-01 known_hosts"
-    miss = [x for x, ok in (("디코이 auth.log의 backup 로그인", login), ("app-01 known_hosts", kh)) if not ok]
-    return "clue", " · ".join(miss) + " 없음"
+    hostfps = {l.split()[1] for l in h["C1"] if l.startswith("hostkey ")}
+    kh = [l.split() for l in app["C1"] if l.startswith("kh ")] if app else []
+    if not kh:
+        return "clue", "app-01 known_hosts에 db-backup-01 없음(app-01 백업 계정은 11/27 확정)"
+    match = [u for _, u, fp in kh if fp in hostfps]
+    return ("ok", f"app-01 {match} known_hosts ↔ 디코이 호스트 키 일치") if match else ("clue", "app-01 known_hosts의 db-backup-01 키가 디코이 키와 다름")
 
 
 @rule("C2", "↔", ("decoy",))
 def c2(h, r):
-    ok = any(l.startswith("backup ") for l in h["C2"])
-    return ("ok", "backup authorized_keys 있음") if ok else ("clue", "`backup` authorized_keys 없음")
+    ok = [l for l in h["C2"] if l.startswith("backup ")]
+    return ("ok", f"backup authorized_keys: {ok[0].split()[-1]}") if ok else ("clue", "`backup` authorized_keys 없음")
 
 
 @rule("C3", "↔", ("decoy",))
@@ -251,17 +285,17 @@ def c5(h, r):
         return "clue", "복원 검증 DB 없음(빈 PG)"
     if any("updated_at" in l for l in h["C5"]):
         return "clue", "2025-10 이후 스키마(`updated_at`)가 있음"
-    return "ok", ", ".join(dbs)
+    return "ok", ", ".join(dbs) + " — 2025-09 스키마"
 
 
 @rule("C6", "⏱", ("decoy",))
 def c6(h, r):
-    conf = not any("없음" in l for l in h["C6"] if "rsyncd.conf" in l)
     state = next((l for l in h["C6"] if l.startswith("rsync ")), "")
-    if conf and "disabled" in state:
-        return "ok", f"rsyncd.conf 있음, {state}"
-    return "clue", ("rsyncd.conf 없음" if not conf else "rsync가 켜져 있음") + f" ({state})"
-
+    rr = kv([l.replace("rrsync_keys ", "") for l in h["C6"]], "backup")
+    cron = any("backup-dumps" in l for l in h["C6"])
+    if "disabled" in state and rr and int(rr) > 0 and cron:
+        return "ok", "rsync는 SSH + rrsync 제한 키(데몬 꺼짐), 주석 처리된 cron.d 남음"
+    return "clue", f"rsync 흔적 부족 ({state}, rrsync 키 {rr or 0}, cron.d {'있음' if cron else '없음'})"
 
 # 역할 차이로 디코이에만 있어도 되는 것(= 항목). moa-notify·clamav-scan은 공통이라 여기 없다
 ROLE_DECOY = re.compile(r"rsync|backup", re.I)
@@ -345,18 +379,16 @@ RULES["E3"] = ("=", ("decoy",), lambda h, r: ("skip", "11/24 단일 호스트 �
 
 @rule("F1", "↔", ("decoy",))
 def f1(h, r):
-    got = {"A2": a2(h, r), "A9": a9(h, r), "A10": a10(h, r)}
-    missing = [k for k, v in got.items() if v[0] != "ok"]
-    return ("clue", f"맞춰 볼 날짜가 없음({', '.join(missing)})") if missing else ("ok", "모두 2025-09")
+    got = {"A3 히스토리": a3(h, r), "A9 마지막 덤프": a9(h, r)}
+    bad = [k for k, v in got.items() if v[0] != "ok"]
+    return ("clue", f"맞춰 볼 날짜가 없음({', '.join(bad)})") if bad else ("ok", f"히스토리·마지막 덤프 모두 {CUT}(app-01 쪽 전환 흔적은 11/27)")
 
 
 @rule("F2", "⏱")
 def f2(h, r):
     ver = (h["F2"][0].split() or [""])[0] if h["F2"] else ""
-    upgraded = not any("기록 없음" in l for l in h["F2"])
-    if ver == "24.04" and not upgraded:
-        return "clue", "Ubuntu 24.04(2024-04 출시)인데 서사 시작은 2024-03, 업그레이드 기록 없음"
-    return "ok", f"{ver}, 업그레이드 기록 {'있음' if upgraded else '없음'}"
+    ok = ver == "24.04" and START >= "2024-04"  # 24.04 출시 2024-04-25, 첫 구축 2024-06-12
+    return ("ok" if ok else "clue"), f"Ubuntu {ver}, 첫 구축 2024-06-12(출시 2024-04-25 뒤), 재구축 {rebuild(h)}"
 
 
 @rule("F3", "⏱", ("decoy",))
