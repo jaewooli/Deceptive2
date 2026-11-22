@@ -199,15 +199,20 @@ du -sh /backup 2>/dev/null || echo "/backup 없음"
 df -h / | tail -n 1
 
 sec F4
-# 'trap'은 셸 내장 명령과 겹쳐 제외. 바이너리·패키지 문서(/usr/share)는 보지 않는다
-grep -rIilwE 'deceptive2?|honeypot|honeytoken|decoy|canary|cowrie|lure|bait' \
-  /etc /opt /srv /home /root /usr/local /var/log /var/spool /var/backups /backup 2>/dev/null | head -n 30
+# 용어 목록을 명령 인자로 넘기면 sudo(auth.log)·auditd execve 기록에 그 단어가 남는다(11/22 실측: 측정이 디코이를 오염시킴)
+# → 셸 내장 printf로 만들어 파일 기술자로 넘긴다(grep 인자에는 /dev/fd/N만 남음). 영어 + 한국어. 'trap'은 셸 내장 명령과 겹쳐 제외
+terms() { printf '%s\n' 'deceptive' 'honeypot' 'honeytoken' 'decoy' 'canary' 'cowrie' 'lure' 'bait' \
+  '디코이' '미끼' '함정' '허니팟' '허니토큰' '기만' '가짜'; }
+F4_DIRS=(/etc /opt /srv /home /root /usr/local /var/log /var/spool /var/backups /backup)
+grep -rIilwF -f <(terms) "${F4_DIRS[@]}" 2>/dev/null | head -n 30
 # 호스트 이름 자체에 용어가 들어 있으면(로컬 VM lt-decoy) 그 이름이 퍼진 파일과 다른 원인을 나눈다
 echo "hostname=$(hostname)"
 echo "-- 호스트 이름을 지운 뒤에도 남는 파일"
-grep -rIilwE 'deceptive2?|honeypot|honeytoken|decoy|canary|cowrie|lure|bait' \
-  /etc /opt /srv /home /root /usr/local /var/log /var/spool /var/backups /backup 2>/dev/null |
-  while read -r f; do sed "s/$(hostname)//g" "$f" | grep -qiwE 'deceptive2?|honeypot|honeytoken|decoy|canary|cowrie|lure|bait' && echo "$f"; done | head -n 30
+grep -rIilwF -f <(terms) "${F4_DIRS[@]}" 2>/dev/null |
+  while read -r f; do
+    # grep -q는 첫 매치에서 끝나 sed가 SIGPIPE로 죽고, pipefail이 이를 실패로 본다 → 끝까지 센다
+    n=$(sed "s/$(hostname)//g" "$f" | grep -ciwF -f <(terms)); [ "${n:-0}" -gt 0 ] && echo "$f ($n줄)"
+  done | head -n 30
 
 sec F5
 tok=$(curl -s -m 2 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token 2>/dev/null)

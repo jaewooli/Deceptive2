@@ -47,3 +47,14 @@ python3 -I validation/compare.py $D/lt-decoy.txt $D/lt-app.txt --probe $D/lt-dec
 
 - **봇에게는 지금도 구별되지 않는다.** 셸 동작 5종·오류 형식·스크립트 실행·하드웨어·uptime·SSH/PG 응답 모두 app-01과 같음. 실제 OS 디코이를 고른 것(직전 프로젝트: 에뮬레이터는 산술 확장 하나로 판별됨)만으로 자동 층은 끝난다
 - 단서 29개는 모두 **사람 층** → 보완도 사람 층 작업. [로컬] S3: CPU 모델·GPU 1개는 QEMU·내 PC 값(EC2에서 재확인)
+
+### 11/22 보완 1차 — 감시 흔적(D) 동일화
+| 층 | 디코이 전용 단서 | 공통 단서 | 바뀐 것 |
+|---|---|---|---|
+| 자동 | 0 | 0 | — |
+| 사람 | 17 → **12** | 12 → **13** | D1·D3·D5·D7·D8 해소, F4 공통 단서로 새로 잡힘 |
+
+- 한 것: app VM에 `base/install.sh base` 다시 실행(ClamAV cron 반영) + moa-notify 설치(설정은 서버마다 감시 항목만 다름 — PG 감시 끔). D5는 설정 *내용* 차이를 단서로 세지 않고 기록(root 0600, 설계대로). D1에서 D-Bus 요청형 데몬(`fwupd`·`packagekitd`, apt 직후 잠깐 뜸)은 세지 않음
+- **측정 도구가 서버를 오염시키고 있었음**: F4가 영어 용어만 찾아 디코이에 남은 저장소 `~/servers`(README에 "디코이"·"미끼", `vm.sh push`가 남김)를 놓침 → 한국어 용어 추가 후 발견·삭제. 그런데 용어 목록을 명령 인자로 넘기면 **sudo가 auth.log에, auditd(로그인 세션 execve)가 audit.log에 그 단어를 기록** → 측정할 때마다 서버에 "honeypot|decoy|bait"를 써 넣고 있었음. 셸 내장 `printf` → `/dev/fd`로 바꿔 인자에 안 남게 함(측정 전후 audit.log 용어 건수 증가 0 확인). 이미 남은 줄(디코이 audit.log.1 55줄·auth.log 8줄, app audit.log 10줄)은 로그를 고치면 그것도 흔적이라 로컬 VM에선 둠 → F4 공통 단서는 [측정 오염], EC2에선 고친 도구만 사용
+- 같은 날 도구 버그: `pipefail` + `grep -q`(첫 매치에서 종료 → sed SIGPIPE → 실패로 판정)로 큰 로그 파일의 F4 매치를 놓침 → 끝까지 세게 고침
+- EC2 배포 때 지킬 것: 배포 파일(`servers/`)은 서버에 남기지 않는다(SSM/Ansible 임시 경로 후 삭제)

@@ -291,8 +291,39 @@ def hashpath(l):  # "md5 경로" → 경로별 비교가 되도록 그대로 둔
     return l.strip()
 
 
-for i in ("D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"):
+for i in ("D2", "D3", "D4", "D6", "D7", "D8"):
     RULES[i] = ("=", ("decoy",), diff_rule(i, hashpath))
+
+# D1: D-Bus 요청형 데몬은 apt·패치 직후 잠깐 떴다가 스스로 끝난다(운영 서버도 같음) → 차이로 세지 않고 표시
+ONDEMAND = {"fwupd", "packagekitd", "udisksd", "polkitd", "unattended-upgr", "apt.systemd.dai", "(sd-pam)"}
+_d1 = diff_rule("D1", hashpath)
+
+
+def d1(h, r, app=None):
+    a = {l.strip() for l in h["D1"] if l.strip()}
+    b = {l.strip() for l in app["D1"] if l.strip()}
+    od = sorted((a ^ b) & ONDEMAND)
+    h2 = type("H", (), {"__getitem__": lambda self, k: [l for l in h[k] if l.strip() not in ONDEMAND]})()
+    a2 = type("H", (), {"__getitem__": lambda self, k: [l for l in app[k] if l.strip() not in ONDEMAND]})()
+    res = _d1(h2, r, a2)
+    return res + ((f"요청형 데몬 차이(일시적, 세지 않음): {', '.join(od)}",) if od else ())
+
+
+RULES["D1"] = ("=", ("decoy",), d1)
+
+# D5: moa-notify 설정은 서버마다 켜는 감시 항목만 다르게 설계(root 0600) → 파일이 있는지는 비교, 내용 차이는 기록만
+_d5 = diff_rule("D5", lambda l: re.sub(r"^\w+ (/etc/moa-notify/config\.json)$", r"\1", l.strip()))
+
+
+def d5(h, r, app=None):
+    res = _d5(h, r, app)
+    hd = next((l.split()[0] for l in h["D5"] if l.endswith("/etc/moa-notify/config.json")), "")
+    ha = next((l.split()[0] for l in app["D5"] if l.endswith("/etc/moa-notify/config.json")), "")
+    note = "moa-notify 설정 내용은 다름(켜는 감시 항목, root만 읽음 — 설계대로)" if hd and ha and hd != ha else ""
+    return res + (note,) if len(res) == 2 else res
+
+
+RULES["D5"] = ("=", ("decoy",), d5)
 
 
 def e_rule(i):
@@ -340,7 +371,12 @@ def f4(h, r):
     remain = [l for l in lines[cut + 1:] if l.strip()]
     hits = [l for l in lines[:cut] if l.startswith("/")]
     note = f"[로컬] 호스트 이름 `{h.name}`에 용어가 들어 있어 {len(hits)}개 파일에 퍼짐(EC2에서는 db-backup-01)" if TERMS.search(h.name) else ""
-    return ("clue", "남는 파일: " + ", ".join(remain[:5]), note) if remain else ("ok", "0건(호스트 이름 제외)", note)
+    if remain:
+        logs = [x for x in remain if x.startswith("/var/log/")]
+        if logs:
+            note = (note + " " if note else "") + "/var/log 걸림은 sudo·auditd가 남긴 명령줄일 수 있음(11/22 측정 오염 확인)"
+        return "clue", f"남는 파일 {len(remain)}개: " + ", ".join(remain[:6]), note
+    return "ok", "0건(호스트 이름 제외)", note
 
 
 @rule("F5", "⏱")
