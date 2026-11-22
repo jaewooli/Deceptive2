@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""구별 단서 판정 (checks.md 39개). collect.sh·probe.sh 원자료를 받아 항목별로 판정한다.
-  python3 -I validation/compare.py <디코이.txt> <app.txt> [--probe <디코이.probe.txt> <app.probe.txt>] > report.md
+"""구별 단서 판정 (checks.md 43개, 자동 층·사람 층). collect.sh·probe.sh·botprobe.sh 원자료를 받아 항목별로 판정한다.
+  python3 -I validation/compare.py <디코이.txt> <app.txt> [--probe <디코이.probe> <app.probe>] [--bot <디코이.bot> <app.bot>] > report.md
 
 판정
   ok     기대 상태와 맞음
@@ -51,11 +51,13 @@ def first_date(lines):
 
 
 class Host:
-    def __init__(self, path, probe=None):
+    def __init__(self, path, probe=None, bot=None):
         self.s = load(path)
         if probe:
             for k, v in load(probe).items():
                 self.s["probe_" + k] = v
+        if bot:
+            self.s.update(load(bot))
         self.name = kv(self.s.get("META", []), "hostname")
         self.now = date.fromisoformat(kv(self.s["META"], "collected_at")[:10])
 
@@ -354,6 +356,53 @@ def f6(h, r):
     return "clue", "`backup`(uid 34)이 배포판 기본 그대로(셸 nologin, 사용 흔적 없음)"
 
 
+# ---------------------------------------------------------------- 자동 층(봇) S1~S4 — botprobe.sh
+@rule("S1", "=")
+def s1(h, r):
+    want = {"token": "k7Qx2", "arith": "320264", "setargs": "3:b", "fn": "7"}
+    bad = [k for k, v in want.items() if kv(h["S1"], k) != v]
+    if not kv(h["S1"], "pid").isdigit():
+        bad.append("pid")
+    return ("clue", "실패: " + ", ".join(bad)) if bad else ("ok", "셸 동작 5종 통과(실제 OS라 당연 — 계획 3절: 한 줄만 기록)")
+
+
+@rule("S2", "=")
+def s2(h, r):
+    err, sc = kv(h["S2"], "err"), kv(h["S2"], "script")
+    return ("ok", f"`{err}`, 스크립트 실행됨") if "not found" in err and sc == "ok" else ("clue", f"err=`{err}` script={sc}")
+
+
+@rule("S3", "=", ("decoy",))
+def s3(h, r, app=None):
+    keys = ("nproc", "cpu", "arch", "uname", "gpu", "mem_mib", "busybox")
+    diff = [k for k in keys if kv(h["S3"], k) != kv(app["S3"], k)]
+    note = ""
+    if kv(h["S3"], "gpu") != "0" or "Core(TM)" in kv(h["S3"], "cpu"):
+        note = f"[로컬] CPU `{kv(h['S3'], 'cpu')}`·GPU {kv(h['S3'], 'gpu')}개는 QEMU·내 PC 값(EC2 t3.small은 Xeon·GPU 없음, 세 서버 같음)"
+    if diff:
+        return "clue", "app-01과 다름: " + ", ".join(f"{k}={kv(h['S3'], k)}" for k in diff), note
+    return "ok", f"app-01과 같음(코어 {kv(h['S3'], 'nproc')}, {kv(h['S3'], 'mem_mib')} MiB)", note
+
+
+@rule("S4", "=", ("decoy",))
+def s4(h, r, app=None):
+    up = int(kv(h["S4"], "uptime_s") or 0)
+    upa = int(kv(app["S4"], "uptime_s") or 0)
+    if kv(h["S4"], "last_readable") != "yes":
+        return "clue", "일반 계정이 `last`를 못 읽음"
+    if abs(up - upa) > 86400:
+        return "clue", f"uptime이 app-01과 하루 넘게 다름({up}s vs {upa}s)"
+    return "ok", f"uptime {up // 3600}시간(app-01 {upa // 3600}시간), `last` 읽힘 — 봇의 uptime 판정 기준은 직전 보고서에 없음"
+
+
+# 층: 자동(봇·스캐너, 직전 프로젝트 관측 + Bitter Harvest) / 사람(시멘틱, T1497.002·TA0007)
+TIER = {i: ("자동" if i[0] in "SE" else "사람") for i in ("S1 S2 S3 S4 E1 E2 E3".split())}
+
+
+def tier(i):
+    return TIER.get(i, "사람")
+
+
 # ---------------------------------------------------------------- 실행
 def run(h, role, app):
     out = {}
@@ -371,15 +420,17 @@ def run(h, role, app):
 
 def main():
     args = sys.argv[1:]
-    probes = [None, None]
-    if "--probe" in args:
-        k = args.index("--probe")
-        probes = args[k + 1:k + 3]
-        args = args[:k]
-    d, a = Host(args[0], probes[0]), Host(args[1], probes[1])
+    opt = {"--probe": [None, None], "--bot": [None, None]}
+    for flag in opt:
+        if flag in args:
+            k = args.index(flag)
+            opt[flag] = args[k + 1:k + 3]
+            del args[k:k + 3]
+    d = Host(args[0], opt["--probe"][0], opt["--bot"][0])
+    a = Host(args[1], opt["--probe"][1], opt["--bot"][1])
     rd, ra = run(d, "decoy", a), run(a, "app", d)
 
-    order = sorted(RULES, key=lambda i: (i[0], int(i[1:])))
+    order = sorted(RULES, key=lambda i: (tier(i) != "자동", "SEABCDF".index(i[0]), int(i[1:])))
     cats = {"디코이 전용": [], "공통": [], "app-01만": []}
     for i in order:
         sd, sa = rd[i][0], ra[i][0]
@@ -393,19 +444,23 @@ def main():
     local = [i for i in order if "[로컬]" in rd[i][2] or "[로컬]" in ra[i][2]]
 
     print(f"# 구별 단서 측정 — {d.now} (디코이 `{d.name}` · 비교 `{a.name}`)\n")
-    print(f"- **디코이 전용 단서 {len(cats['디코이 전용'])}개**: {', '.join(cats['디코이 전용']) or '-'}")
-    print(f"- **공통 단서(서사를 깨는 단서) {len(cats['공통'])}개**: {', '.join(cats['공통']) or '-'}")
-    print(f"- app-01에만 있는 단서 {len(cats['app-01만'])}개: {', '.join(cats['app-01만']) or '-'}")
-    print(f"- 이번에 못 잰 항목 {len(skipped)}개: {', '.join(skipped) or '-'}")
-    print(f"- 로컬 VM에서만 생기는 원인 표시 {len(local)}개: {', '.join(local) or '-'}\n")
-    print("| ID | 판정 | 디코이 | 근거(디코이) | app-01 | 근거(app-01) |")
-    print("|---|---|---|---|---|---|")
+    for t, desc in (("자동", "봇·스캐너가 하는 검사 — 계산 자원이 있는 진짜 리눅스인가, 응답이 진짜 서비스인가"),
+                    ("사람", "사람이 하는 시멘틱 검사 — 이 서버가 무엇이고 이야기가 맞는가")):
+        ids = [i for i in order if tier(i) == t]
+        pick = lambda c: [i for i in cats[c] if i in ids]
+        print(f"## {t} 층 ({len(ids)}개) — {desc}")
+        print(f"- **디코이 전용 단서 {len(pick('디코이 전용'))}개**: {', '.join(pick('디코이 전용')) or '-'}")
+        print(f"- **공통 단서 {len(pick('공통'))}개**: {', '.join(pick('공통')) or '-'}")
+        print(f"- app-01에만 있는 단서 {len(pick('app-01만'))}개: {', '.join(pick('app-01만')) or '-'}")
+        print(f"- 못 잰 항목: {', '.join(i for i in skipped if i in ids) or '-'} / [로컬] 원인: {', '.join(i for i in local if i in ids) or '-'}\n")
+    print("| 층 | ID | 판정 | 디코이 | 근거(디코이) | app-01 | 근거(app-01) |")
+    print("|---|---|---|---|---|---|---|")
     mark = {"ok": "✓", "clue": "**단서**", "na": "—", "skip": "skip"}
     for i in order:
         kind = RULES[i][0]
         dn = rd[i][1] + (f" {rd[i][2]}" if rd[i][2] else "")
         an = ra[i][1] + (f" {ra[i][2]}" if ra[i][2] else "")
-        print(f"| {i} | {kind} | {mark[rd[i][0]]} | {dn.replace('|', '/')} | {mark[ra[i][0]]} | {an.replace('|', '/')} |")
+        print(f"| {tier(i)} | {i} | {kind} | {mark[rd[i][0]]} | {dn.replace('|', '/')} | {mark[ra[i][0]]} | {an.replace('|', '/')} |")
 
 
 if __name__ == "__main__":
