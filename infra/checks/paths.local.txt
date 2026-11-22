@@ -1,0 +1,35 @@
+# 로컬 랩 경로 단언(infra/checks/paths.py). 호스트 = lab.sh 역할 이름. 주소가 바뀌면(구간 분리 등) 이 파일을 같이 고친다.
+# 공격자 출발지 예: web-01 10.0.20.11, app-01 10.0.20.10. 투영 주소 10.0.20.30 → farm stg-01
+
+# ---- 모든 중계 홉: local 규칙(pref 0)이 살아 있어야 서버가 자기 주소로 오는 패킷을 받는다(11/22 먹통 원인)
+sensor | has | ip rule show pref 0 | lookup local | local 규칙 pref 0
+farm   | has | ip rule show pref 0 | lookup local | local 규칙 pref 0
+app-01 | has | ip rule show pref 0 | lookup local | local 규칙 pref 0
+web-01 | has | ip rule show pref 0 | lookup local | local 규칙 pref 0
+# networkd가 외래 규칙·경로를 지우지 않게(규칙·경로를 거는 서버마다)
+sensor | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageForeignRoutingPolicyRules=no | networkd 외래 규칙 보존
+farm   | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageForeignRoutingPolicyRules=no | networkd 외래 규칙 보존
+app-01 | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageForeignRoutingPolicyRules=no | networkd 외래 규칙 보존
+web-01 | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageForeignRoutingPolicyRules=no | networkd 외래 규칙 보존
+
+# ---- 투영(Acalvio): 공격자 → 센서 → relay → farm → stg-01, 응답은 거꾸로 같은 터널
+sensor | route | 10.0.20.30 from 10.0.20.11 iif enp0s3 | relay | 센서: 투영 주소로 온 것 → 터널
+sensor | route | 10.0.20.11 from 10.0.20.30 iif relay | enp0s3 | 센서: 팜 응답 → 투영 NIC
+sensor | has | iptables -t mangle -S FORWARD | -o relay .*TCPMSS | 센서: 터널 쪽 MSS 조정
+sensor | hasnt | ip -4 -o addr show | inet 10\.0\.20\.30/ | 센서: 투영 주소를 자기 주소로 두지 않음(fail-safe)
+farm   | route | 10.0.20.30 from 10.0.20.11 iif relay | ve-stg-01 | 팜: 터널로 온 것 → stg-01
+farm   | route | 10.0.20.11 from 10.0.20.30 iif ve-stg-01 | relay | 팜: stg-01 응답 → 터널(비면 LAN 직행 — 11/23 키 교환 멈춤)
+farm   | has | ip route show 10.0.20.30/32 | blackhole 10\.0\.20\.30 .*metric 1000 | 팜: stg-01이 죽어도 LAN으로 새지 않음
+farm   | has | iptables -t mangle -S FORWARD | -o relay .*TCPMSS | 팜: 터널 쪽 MSS 조정
+
+# ---- 트랩 중계(Illusive): 공격자 → EDH 빈 포트 → (DNAT 169.254.200.1) wg0 → farm edhN → 트랩(EDH 주소), 응답은 같은 터널
+app-01 | route | 169.254.200.1 | wg0 | app-01(EDH): 트랩 중계 주소 → wg0
+app-01 | has | nft list table ip local_fwd | daddr 10\.0\.20\.10 tcp dport 6379 .*dnat to 169\.254\.200\.1 | app-01: 6379 → 중계 주소
+web-01 | route | 169.254.200.1 | wg0 | web-01(EDH): 트랩 중계 주소 → wg0
+web-01 | has | nft list table ip local_fwd | daddr 10\.0\.20\.11 tcp dport 8080 .*dnat to 169\.254\.200\.1 | web-01: 8080 → 중계 주소
+farm   | has | nft list table ip edh_1 | iifname "edh1" ip daddr 169\.254\.200\.1 dnat to 10\.0\.20\.10 | 팜: edh1 중계 주소 → 트랩 주소(app-01)
+farm   | has | nft list table ip edh_2 | iifname "edh2" ip daddr 169\.254\.200\.1 dnat to 10\.0\.20\.11 | 팜: edh2 중계 주소 → 트랩 주소(web-01)
+farm   | route | 10.0.20.10 from 10.0.20.11 iif edh1 | ve-trap-app-01 | 팜: edh1 → trap-app-01
+farm   | route | 10.0.20.11 from 10.0.20.10 iif ve-trap-app-01 | edh1 | 팜: trap-app-01 응답 → edh1
+farm   | route | 10.0.20.11 from 10.0.20.10 iif edh2 | ve-trap-web-01 | 팜: edh2 → trap-web-01
+farm   | route | 10.0.20.10 from 10.0.20.11 iif ve-trap-web-01 | edh2 | 팜: trap-web-01 응답 → edh2
