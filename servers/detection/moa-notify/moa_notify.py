@@ -246,6 +246,7 @@ class ForwardedPorts:
         self.inner = cfg.get("inner", "169.254.200.1")
         self.prefix = cfg.get("prefix", "IN-FWD")
         self.table = cfg.get("table", "local_fwd")
+        self.chain = cfg.get("ttl_chain", "LOCAL_FWD")
         self.ports = sorted(int(p["port"]) for p in cfg.get("ports", []))
         self.released = set()
         self.next_check = 0
@@ -268,6 +269,27 @@ class ForwardedPorts:
     def route_ok(self):
         return f"dev {self.tunnel}" in self._ip("route", "show", f"{self.inner}/32").stdout
 
+    def _ipt(self, *args):
+        import subprocess
+        return subprocess.run(["/usr/sbin/iptables", "-w", "-t", "mangle", *args], capture_output=True, text=True)
+
+    def ttl_ok(self):
+        return self._ipt("-C", "PREROUTING", "-j", self.chain).returncode == 0
+
+    def apply_ttl(self):
+        """넘긴 연결은 이 서버와 farm에서 한 번씩 포워딩돼 TTL이 2 준다 → 공격자에게 같은 서버의 22번은 TTL 64, 넘긴 포트는 62로
+        보인다(11/23 실측, nmap·p0f 단서). 포워딩하는 홉마다 들어올 때 1을 되돌린다(양방향 — traceroute에 홉이 생기지도 않게).
+        nft에는 TTL 산술이 없어 iptables(xt_TTL). 체인이 지워져도 TTL만 원래대로 돌아갈 뿐 서버는 멀쩡하다."""
+        if self._ipt("-n", "-L", self.chain).returncode:
+            self._ipt("-N", self.chain)
+        self._ipt("-F", self.chain)
+        self._ipt("-A", self.chain, "-i", self.tunnel, "-j", "TTL", "--ttl-inc", "1")
+        if self.active():
+            self._ipt("-A", self.chain, "-i", self.iface, "-d", f"{self.addr}/32", "-p", "tcp", "-m", "multiport",
+                      "--dports", ",".join(map(str, self.active())), "-j", "TTL", "--ttl-inc", "1")
+        if not self.ttl_ok():
+            self._ipt("-A", "PREROUTING", "-j", self.chain)
+
     def apply(self):
         import subprocess
         for path, val in (("/proc/sys/net/ipv4/ip_forward", "1"), (f"/proc/sys/net/ipv4/conf/{self.tunnel}/rp_filter", "2")):
@@ -285,6 +307,7 @@ class ForwardedPorts:
         r = subprocess.run(["/usr/sbin/nft", "-f", "-"], input=text, text=True, capture_output=True)
         if r.returncode:
             log.error("nft: %s", r.stderr.strip())
+        self.apply_ttl()
         log.info("넘기는 포트: %s", ", ".join(map(str, self.active())) or "-")
         # 관리 쪽이 읽는 상태(양보한 포트는 여기서 다시 잡지 않는다 — 실제 서비스가 재시작하는 틈에 가로채면 운영 트래픽을 넘김)
         try:
@@ -311,7 +334,7 @@ class ForwardedPorts:
         # 터널이 늦게 뜨거나 networkd가 "외래" 경로를 지워도 5초 안에 다시 건다(11/22 재부팅·networkd 재시작 시험)
         if now >= self.next_heal:
             self.next_heal = now + 5
-            if self.active() and os.path.exists(f"/sys/class/net/{self.tunnel}") and not self.route_ok():
+            if self.active() and os.path.exists(f"/sys/class/net/{self.tunnel}") and not (self.route_ok() and self.ttl_ok()):
                 log.info("터널 경로 다시 설정")
                 self.apply()
         busy = listening_ports() & set(self.active())

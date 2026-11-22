@@ -79,13 +79,18 @@ cat > "/etc/wireguard/$WG.conf" <<EOF
 PrivateKey = $(cat "/etc/wireguard/$WG.key")
 ListenPort = $((51820 + N))
 Table = off
-MTU = 1380
+# MTU = 구간(LAN·VPC) MTU 그대로(로컬 1500, AWS 9001). 바깥 UDP는 IP 단편화에 맡긴다(WireGuard는 바깥 패킷에 DF를 안 건다).
+# 11/23 실측: 1380 + MSS 조정이면 공격자 SYN-ACK에 MSS 1340(이웃은 1460)·DF 1472 ping 소실·tracepath 무응답 → 디코이가 터널 뒤임이 드러남
+MTU = ${SEGMENT_MTU:-$(cat /sys/class/net/"$(ip -o route get 1.1.1.1 | sed -n 's/.* dev \([^ ]*\).*/\1/p')"/mtu)}
 
 # 터널 쪽 규칙·응답 경로는 터널 수명 주기에 묶는다(시작 스크립트로 하면 터널보다 먼저 돌아 빠짐 — 11/22 재부팅 시험)
 # EDH는 터널 안 주소(169.254.200.1)로 DNAT해 보낸다 → 여기서 다시 EDH 주소로 DNAT(컨테이너가 EDH 주소를 가짐). conntrack이 응답을 되돌림
 PostUp = nft -f - <<< "table ip edh_$N { chain pre { type nat hook prerouting priority dstnat; policy accept; iifname \"%i\" ip daddr 169.254.200.1 dnat to $EIP; }; }"
 PostUp = ip rule show pref $((60 + N)) | grep -q . || ip rule add pref $((60 + N)) iif %i lookup $T_IN
 PostUp = ip route replace default dev %i table $T_OUT
+# 포워딩 홉마다 TTL이 1 준다 → EDH의 22번은 TTL 64, 넘긴 포트는 62(11/23 실측). 들어올 때 1을 되돌린다(EDH 쪽은 moa-notify)
+PostUp = iptables -w -t mangle -C PREROUTING -i %i -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i %i -j TTL --ttl-inc 1
+PostUp = iptables -w -t mangle -C PREROUTING -i ve-+ -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i ve-+ -j TTL --ttl-inc 1
 PreDown = ip rule del pref $((60 + N)) 2>/dev/null || true
 PreDown = nft delete table ip edh_$N 2>/dev/null || true
 

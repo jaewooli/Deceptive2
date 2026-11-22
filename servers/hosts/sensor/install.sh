@@ -56,14 +56,18 @@ cat > /etc/wireguard/relay.conf <<EOF
 PrivateKey = $(cat /etc/wireguard/relay.key)
 Address = 10.200.0.1/30
 Table = off
-MTU = 1380
+# MTU = 구간(LAN·VPC) MTU 그대로(로컬 1500, AWS 9001). 바깥 UDP는 IP 단편화에 맡긴다(WireGuard는 바깥 패킷에 DF를 안 건다).
+# 11/23 실측: 1380 + MSS 조정이면 공격자 SYN-ACK에 MSS 1340(이웃은 1460)·DF 1472 ping 소실·tracepath 무응답 → 디코이가 터널 뒤임이 드러남
+MTU = $(cat /sys/class/net/$IF/mtu)
 # 투영 주소 → 터널(main /32, 규칙 아님 — 지워져도 센서는 멀쩡, 터널이 다시 뜨면 다시 걸림)
 PostUp = ip route replace $X/32 dev %i
 # 팜에서 돌아온 응답(출발지 = 투영 주소)은 투영 NIC로(이 규칙이 지워지면 투영만 멈춤)
 PostUp = ip rule show pref 51 | grep -q . || ip rule add pref 51 iif %i from $X/32 lookup $T_OUT
 PostUp = ip route replace $SUBNET dev $IF table $T_OUT
 PostUp = ip route replace $OUT_DEFAULT table $T_OUT
-PostUp = iptables -t mangle -C FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+# 포워딩 홉마다 TTL이 1 준다 → 투영 디코이가 같은 서브넷인데 TTL 62로 보임(11/23 실측). 들어올 때 1을 되돌린다(양방향: 응답 TTL 64, traceroute에 홉 없음)
+PostUp = iptables -w -t mangle -C PREROUTING -i %i -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i %i -j TTL --ttl-inc 1
+PostUp = iptables -w -t mangle -C PREROUTING -i $IF -d $X/32 -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i $IF -d $X/32 -j TTL --ttl-inc 1
 PreDown = ip rule del pref 51 2>/dev/null || true
 
 [Peer]

@@ -13,7 +13,9 @@ cat > /etc/wireguard/wg0.conf <<CONF
 [Interface]
 PrivateKey = $(cat /etc/wireguard/wg0.key)
 Table = off
-MTU = 1380
+# MTU = 구간(LAN·VPC) MTU 그대로(로컬 1500, AWS 9001). 바깥 UDP는 IP 단편화에 맡긴다(WireGuard는 바깥 패킷에 DF를 안 건다).
+# 11/23 실측: 1380 + MSS 조정이면 공격자 SYN-ACK에 MSS 1340(이웃은 1460)·DF 1472 ping 소실·tracepath 무응답 → 디코이가 터널 뒤임이 드러남
+MTU = $(cat /sys/class/net/"$(ip -o route get 1.1.1.1 | sed -n 's/.* dev \([^ ]*\).*/\1/p')"/mtu)
 
 [Peer]
 PublicKey = $FPUB

@@ -15,12 +15,16 @@ web-01 | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageFor
 # ---- 투영(Acalvio): 공격자 → 센서 → relay → farm → stg-01, 응답은 거꾸로 같은 터널
 sensor | route | 10.0.20.30 from 10.0.20.11 iif enp0s3 | relay | 센서: 투영 주소로 온 것 → 터널
 sensor | route | 10.0.20.11 from 10.0.20.30 iif relay | enp0s3 | 센서: 팜 응답 → 투영 NIC
-sensor | has | iptables -t mangle -S FORWARD | -o relay .*TCPMSS | 센서: 터널 쪽 MSS 조정
+sensor | has | iptables -t mangle -S PREROUTING | -i relay -j TTL --ttl-inc 1 | 센서: 팜 응답 TTL 보정
+sensor | has | iptables -t mangle -S PREROUTING | -d 10\.0\.20\.30/32 -i enp0s3 -j TTL --ttl-inc 1 | 센서: 투영 주소로 들어온 것 TTL 보정
 sensor | hasnt | ip -4 -o addr show | inet 10\.0\.20\.30/ | 센서: 투영 주소를 자기 주소로 두지 않음(fail-safe)
 farm   | route | 10.0.20.30 from 10.0.20.11 iif relay | ve-stg-01 | 팜: 터널로 온 것 → stg-01
 farm   | route | 10.0.20.11 from 10.0.20.30 iif ve-stg-01 | relay | 팜: stg-01 응답 → 터널(비면 LAN 직행 — 11/23 키 교환 멈춤)
 farm   | has | ip route show 10.0.20.30/32 | blackhole 10\.0\.20\.30 .*metric 1000 | 팜: stg-01이 죽어도 LAN으로 새지 않음
-farm   | has | iptables -t mangle -S FORWARD | -o relay .*TCPMSS | 팜: 터널 쪽 MSS 조정
+farm   | has | iptables -t mangle -S PREROUTING | -i relay -j TTL --ttl-inc 1 | 팜: 터널로 온 것 TTL 보정
+farm   | has | iptables -t mangle -S PREROUTING | -i ve-\+ -j TTL --ttl-inc 1 | 팜: 디코이 응답 TTL 보정
+farm   | has | iptables -t mangle -S PREROUTING | -i edh1 -j TTL --ttl-inc 1 | 팜: edh1 TTL 보정
+farm   | has | iptables -t mangle -S PREROUTING | -i edh2 -j TTL --ttl-inc 1 | 팜: edh2 TTL 보정
 
 # ---- 트랩 중계(Illusive): 공격자 → EDH 빈 포트 → (DNAT 169.254.200.1) wg0 → farm edhN → 트랩(EDH 주소), 응답은 같은 터널
 app-01 | route | 169.254.200.1 | wg0 | app-01(EDH): 트랩 중계 주소 → wg0
@@ -33,3 +37,15 @@ farm   | route | 10.0.20.10 from 10.0.20.11 iif edh1 | ve-trap-app-01 | 팜: edh
 farm   | route | 10.0.20.11 from 10.0.20.10 iif ve-trap-app-01 | edh1 | 팜: trap-app-01 응답 → edh1
 farm   | route | 10.0.20.11 from 10.0.20.10 iif edh2 | ve-trap-web-01 | 팜: edh2 → trap-web-01
 farm   | route | 10.0.20.10 from 10.0.20.11 iif ve-trap-web-01 | edh2 | 팜: trap-web-01 응답 → edh2
+app-01 | has | iptables -t mangle -S LOCAL_FWD | -i wg0 -j TTL --ttl-inc 1 | app-01: 트랩 응답 TTL 보정(moa-notify)
+app-01 | has | iptables -t mangle -S PREROUTING | -j LOCAL_FWD | app-01: TTL 보정 체인 연결
+web-01 | has | iptables -t mangle -S LOCAL_FWD | -i wg0 -j TTL --ttl-inc 1 | web-01: 트랩 응답 TTL 보정(moa-notify)
+web-01 | has | iptables -t mangle -S PREROUTING | -j LOCAL_FWD | web-01: TTL 보정 체인 연결
+
+# ---- 터널 MTU = 구간 MTU, MSS 조정 없음(11/23: 1380 + 조정이면 SYN-ACK MSS 1340·DF ping 소실로 터널이 드러남)
+sensor | has | cat /sys/class/net/relay/mtu | ^1500$ | 센서 relay MTU = LAN
+farm   | hasnt | cat /sys/class/net/relay/mtu /sys/class/net/edh1/mtu /sys/class/net/edh2/mtu | ^(?!1500$).+$ | 팜 터널 MTU = LAN(relay·edh1·edh2)
+app-01 | has | cat /sys/class/net/wg0/mtu | ^1500$ | app-01 wg0 MTU = LAN
+web-01 | has | cat /sys/class/net/wg0/mtu | ^1500$ | web-01 wg0 MTU = LAN
+sensor | hasnt | iptables -t mangle -S | TCPMSS | 센서: MSS 조정 없음(손으로 넣은 잔재 포함 — 11/23 발견)
+farm   | hasnt | iptables -t mangle -S | TCPMSS | 팜: MSS 조정 없음

@@ -26,12 +26,17 @@ PrivateKey = $(cat /etc/wireguard/relay.key)
 Address = 10.200.0.2/30
 ListenPort = 51820
 Table = off
-MTU = 1380
+# MTU = 구간(LAN·VPC) MTU 그대로(로컬 1500, AWS 9001). 바깥 UDP는 IP 단편화에 맡긴다(WireGuard는 바깥 패킷에 DF를 안 건다).
+# 11/23 실측: 1380 + MSS 조정이면 공격자 SYN-ACK에 MSS 1340(이웃은 1460)·DF 1472 ping 소실·tracepath 무응답 → 디코이가 터널 뒤임이 드러남
+MTU = ${SEGMENT_MTU:-$(cat /sys/class/net/"$(ip -o route get 1.1.1.1 | sed -n 's/.* dev \([^ ]*\).*/\1/p')"/mtu)}
 # 컨테이너 응답 경로는 터널 수명 주기에 묶는다 — 컨테이너 시작 스크립트에 두면 터널보다 먼저 돌아 경로표가 비고,
-# 응답이 같은 LAN으로 바로 나가 터널을 우회한다(MSS 조정을 못 받아 큰 패킷이 터널 MTU에서 버려짐 — 11/23 SSH 키 교환 멈춤)
+# 응답이 같은 LAN으로 바로 나가 터널을 우회한다(11/23 SSH 키 교환 멈춤)
 PostUp = ip route replace default dev %i table $T_OUT
 PostUp = ip rule show pref 50 | grep -q . || ip rule add pref 50 iif $VETH lookup $T_OUT
-PostUp = iptables -t mangle -C FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+
+# 포워딩 홉마다 TTL이 1 준다 → 투영 디코이가 같은 서브넷인데 TTL 62로 보임(11/23 실측). 들어올 때 1을 되돌린다(양방향: 응답 TTL 64, traceroute에 홉 없음)
+PostUp = iptables -w -t mangle -C PREROUTING -i %i -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i %i -j TTL --ttl-inc 1
+PostUp = iptables -w -t mangle -C PREROUTING -i ve-+ -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i ve-+ -j TTL --ttl-inc 1
 
 [Peer]
 PublicKey = $SENSOR_PUB
