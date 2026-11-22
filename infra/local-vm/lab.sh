@@ -47,6 +47,8 @@ env_for() {
   fi
   export VM_LAN_EXTRA
   if [ "$extra" != "-" ]; then export VM_EXTRA_FWD=$extra; else unset VM_EXTRA_FWD; fi
+  # farm은 디코이 VM을 품는다(3중 중첩): vCPU 4, 디코이는 1(2면 게스트 메모리 손상 — 11/23 Oops·soft lockup, destinations farm.guest_cpus)
+  if [ "$role" = farm ]; then export VM_CPUS=4; else unset VM_CPUS; fi
   LAN_IP=$ip; LAN_GW=${LANGW[$lan]}; ROLE=$role
 }
 

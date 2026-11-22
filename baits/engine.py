@@ -230,7 +230,7 @@ def place_projection(r, pid):
     key = Path(yaml.safe_load((OUT / "inventory.yml").read_text())["all"]["vars"]["ansible_ssh_private_key_file"] + ".pub")
     n = a["name"]
     run = (f"set -euo pipefail\ncd \"$(dirname \"$0\")\"\n"
-           f"APT_SNAPSHOT={a.get('platform', {}).get('apt_snapshot') or ''} bash guest/guest.sh create {n} {a['addr']} {a['gw']} {p['mac']} {a['mem']} 2 {','.join(a['packages'])} mgmt.pub {'pg' if a['pg'] else ''}\n"
+           f"APT_SNAPSHOT={a.get('platform', {}).get('apt_snapshot') or ''} bash guest/guest.sh create {n} {a['addr']} {a['gw']} {p['mac']} {a['mem']} {farm.get('guest_cpus', 2)} {','.join(a['packages'])} mgmt.pub {'pg' if a['pg'] else ''}\n"
            f"bash guest/guest.sh offline {n}\n(cd role && GUEST_NAME={n} bash ./role.sh {' '.join(rargs)})\n"
            f"bash guest/guest.sh seal {n}\nbash guest/guest.sh online {n}\n")
     files = {"guest": str(SRV / "hosts/farm/guest"), "guest/base": str(SRV / "base"),
@@ -244,7 +244,9 @@ def recall_projection(r, pid):
     a, d = p["anchor"], dests()
     n, x = a["name"], a["addr"].split("/")[0]
     one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"""systemctl disable --now guest@{n} 2>/dev/null
-rm -f /var/lib/guests/{n}.qcow2 /var/lib/guests/{n}-user-data.last /etc/guest/{n}.env /etc/guest/{n}.pub /etc/systemd/network/10-ve-{n}.network /var/log/guests/{n}.log
+findmnt -rno SOURCE /var/lib/machines/{n} >/dev/null && umount -R /var/lib/machines/{n}; [ -f /run/guest-{n}.nbd ] && qemu-nbd -d $(cat /run/guest-{n}.nbd) >/dev/null; rm -f /run/guest-{n}.nbd
+ip rule del pref 49 iif ve-{n} lookup main 2>/dev/null; nft delete table ip guest_build 2>/dev/null   # 빌드 중 중단됐을 때의 NAT
+rm -f /var/lib/guests/{n}.qcow2 /var/lib/guests/{n}-* /etc/guest/{n}.env /etc/guest/{n}.pub /etc/systemd/network/10-ve-{n}.network /var/log/guests/{n}.log
 while ip rule del iif ve-{n} lookup 120 2>/dev/null; do :; done
 ip route del {x}/32 2>/dev/null; ip route del blackhole {x}/32 metric 1000 2>/dev/null; networkctl reload 2>/dev/null; true
 """}])

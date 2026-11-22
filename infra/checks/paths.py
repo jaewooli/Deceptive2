@@ -41,9 +41,9 @@ def load(spec):
 def script_for(checks):
     out = ["exec 2>&1"]
     for i, c in enumerate(checks):
-        out.append(f"echo @@{i}")
+        out.append(f"echo; echo @@{i}")   # 앞 명령 출력이 줄바꿈 없이 끝나도(curl -w) 구분 표시가 붙지 않게
         out.append(f"ip -o route get {c['arg']}" if c["kind"] == "route" else f"( {c['arg']} ) || true")
-    out.append("echo @@end")
+    out.append("echo; echo @@end")
     return "\n".join(out) + "\n"
 
 

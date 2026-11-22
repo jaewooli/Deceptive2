@@ -19,7 +19,7 @@ sensor | route | 10.0.21.11 from 10.0.21.12 iif relay | enp0s8 | 센서: stg-01 
 sensor | route | 10.0.20.10 from 10.0.21.12 iif relay | enp0s8 | 센서: stg-01 응답(다른 구간) → pub NIC(라우터 .1)
 sensor | has | iptables -t mangle -S PREROUTING | -i relay -j TTL --ttl-inc 1 | 센서: 팜 응답 TTL 보정
 sensor | has | iptables -t mangle -S PREROUTING | -d 10\.0\.21\.12/32 -i enp0s8 -j TTL --ttl-inc 1 | 센서: stg-01로 들어온 것 TTL 보정
-sensor | hasnt | ip -4 -o addr show | inet 10\.0\.2[01]\.(11|12)/ | 센서: 투영 주소를 자기 주소로 두지 않음(fail-safe)
+sensor | hasnt | ip -4 -o addr show | inet 10\.0\.2[01]\.1[12]/ | 센서: 투영 주소를 자기 주소로 두지 않음(fail-safe)
 farm   | route | 10.0.21.12 from 10.0.21.11 iif relay | ve-stg-01 | 팜: 터널로 온 것 → stg-01 VM
 farm   | route | 10.0.21.11 from 10.0.21.12 iif ve-stg-01 | relay | 팜: stg-01 응답 → 터널(비면 LAN 직행 — 11/23 키 교환 멈춤)
 farm   | has | ip route show table 120 | unreachable default .*metric 4000 | 팜: 터널이 없으면 응답을 버림(fail-closed)
