@@ -254,4 +254,57 @@ while True:
                 {"kind": "unit", "name": f"{a['name']}.service", "mtime": made}]
 
 
-TYPES = {t.name: t for t in (EnvDbUrl(), SshConfig(), History(), AwsProfile(), AgentSession(), SyncService())}
+# ------------------------------------------------------------------ 디코이 포트: 운영 서버(EDH)의 안 쓰는 포트 → farm 트랩(US10404747)
+class DecoyPort:
+    name = "decoy_port"
+    # 역할 → 그 서버에 있을 법한 서비스(진짜 소프트웨어로 트랩). 이미 쓰는 포트는 학습 단계에서 뺀다
+    ROLE = [("postgres", "redis", 6379), ("nginx", "nginx-auth", 8080)]
+
+    def match(self, ctx, host, conf=None):
+        import ipaddress
+        lan = ipaddress.ip_network((conf or {}).get("lan_cidr", "10.0.0.0/16"))
+        ifc = next((i for i in ctx.get("net", {}).get("ifaces", []) if ipaddress.ip_interface(i["addr"]).ip in lan), None)
+        if not ifc:
+            return []
+        out = []
+        for proc, svc, port in self.ROLE:
+            if proc in ctx["processes"] and port not in ctx.get("listening", []):
+                net = ipaddress.ip_interface(ifc["addr"]).network
+                out.append({"host": host, "service": svc, "port": port, "iface": ifc["iface"], "addr": ifc["addr"],
+                            "gw": str(net.network_address + 1)})
+        return out
+
+    def new_ident(self, a, used, dest=None):
+        return {"kind": "decoy_port", "value": f"{a['host']}:{a['port']}"}
+
+    def ops(self, a, ident, dest):
+        return []  # 여러 단계(키 교환)라 엔진의 place_decoy_port가 한다
+
+
+# ------------------------------------------------------------------ 디코이 포트를 가리키는 미끼(특허: 활성 디코이 포트를 가리키는 것만 배치)
+class CacheHint:
+    name = "cache_hint"
+
+    def match(self, ctx, host):
+        out = []
+        live = {(d["host"], d["service"], d["port"]) for d in ctx.get("_decoy_ports", [])}
+        for svc in ctx["services"]:
+            for ef in svc["env_files"]:
+                keys = {k["key"]: k for k in ef["keys"]}
+                main = keys.get("DATABASE_URL", {})
+                dbh = main.get("host")
+                hit = next(((h, p) for h, sv, p in live if h == dbh and sv == "redis"), None)
+                if hit and "CACHE_URL" not in keys:  # 앱이 쓰는 DB 서버에 Redis 디코이 포트가 있을 때만
+                    out.append({"path": ef["path"], "edh": hit[0], "port": hit[1], "file_mtime": ef["mtime"]})
+        return out
+
+    def new_ident(self, a, used, dest=None):
+        return {"kind": "via", "value": f"{a['edh']}:{a['port']}"}  # 목적지 디코이 포트가 곧 ID(EDH 경보가 잡음)
+
+    def ops(self, a, ident, dest):
+        # 앱 코드엔 없는 변수라 살아 있는 설정이면 git grep에서 어색하다 → 보류된 설정이 주석으로 남은 모양
+        blk = f"# 세션 저장소를 Redis로 옮기려다 보류 (2024-10)\n# CACHE_URL=redis://{a['edh']}:{a['port']}/0\n"
+        return [{"kind": "block", "path": a["path"], "block": blk, "mtime": ts(a["file_mtime"])}]
+
+
+TYPES = {t.name: t for t in (EnvDbUrl(), SshConfig(), History(), AwsProfile(), AgentSession(), SyncService(), DecoyPort(), CacheHint())}

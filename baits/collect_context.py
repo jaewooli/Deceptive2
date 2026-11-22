@@ -141,6 +141,29 @@ def resolution(names):
     return out
 
 
+def listening():
+    out = set()
+    for f in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            for line in open(f).read().splitlines()[1:]:
+                parts = line.split()
+                if parts[3] == "0A":
+                    out.add(int(parts[1].rsplit(":", 1)[1], 16))
+        except OSError:
+            pass
+    return sorted(out)
+
+
+def addresses():
+    """기본 경로가 아닌 사설망 인터페이스와 주소(로컬 VM은 두 번째 NIC, EC2는 기본 NIC)"""
+    out = []
+    for line in run("ip", "-4", "-o", "addr", "show", "scope", "global").splitlines():
+        p = line.split()
+        out.append({"iface": p[1], "addr": p[3]})
+    dflt = (run("ip", "-4", "route", "show", "default").split() + ["", "", "", "", ""])[4]
+    return {"ifaces": out, "default_iface": dflt}
+
+
 def main():
     svcs = services()
     hostnames = sorted({k.get("host") for s in svcs for e in s["env_files"] for k in e["keys"] if k.get("host")})
@@ -152,6 +175,8 @@ def main():
         "etc_hosts_mtime": mtime("/etc/hosts"),
         "tools": {t: bool(shutil.which(t)) for t in ("ssh", "psql", "aws", "git", "ssh-agent", "tmux")},
         "processes": sorted(set(run("ps", "-eo", "comm=").split())),
+        "listening": listening(),
+        "net": addresses(),
     }, ensure_ascii=False))
 
 

@@ -228,47 +228,77 @@ def listening_ports():
 
 
 class ForwardedPorts:
-    """이 서버에서 쓰지 않는 포트로 온 연결을 다른 서버로 넘기고(nftables), 넘길 때마다 알린다.
-    실제 프로그램이 그 포트를 쓰기 시작하면 규칙을 빼고(양보) 알린다."""
+    """이 서버에서 쓰지 않는 포트로 온 연결을 터널로 다른 서버(트랩)에 넘기고, 넘길 때마다 알린다.
+    주소 변환 없이 정책 라우팅으로 넘긴다(받는 쪽이 이 서버 주소를 그대로 갖고 진짜 출발지를 봄 — 11/22: masquerade면
+    서비스가 보여 주는 상대·자기 주소로 중계가 드러남). 실제 프로그램이 그 포트를 쓰기 시작하면 그 포트만 빼고(양보) 알린다."""
 
     name = "ports"
 
     def __init__(self, cfg, host):
         self.host = host
         self.addr = cfg["address"]
+        self.iface = cfg["iface"]
+        self.tunnel = cfg.get("tunnel", "wg0")
+        self.rt = int(cfg.get("table_id", 130))
+        self.pref = int(cfg.get("rule_pref", 50))
         self.prefix = cfg.get("prefix", "IN-FWD")
         self.table = cfg.get("table", "local_fwd")
-        self.ports = {int(p["port"]): p["to"] for p in cfg.get("ports", [])}
+        self.ports = sorted(int(p["port"]) for p in cfg.get("ports", []))
         self.released = set()
         self.next_check = 0
-        busy = listening_ports() & set(self.ports)
-        for p in sorted(busy):  # 학습: 이미 쓰는 포트는 처음부터 넘기지 않는다
+        for p in sorted(listening_ports() & set(self.ports)):  # 학습: 이미 쓰는 포트는 처음부터 넘기지 않는다
             self.released.add(p)
             log.info("포트 %d 사용 중 — 넘기지 않음", p)
         self.apply()
 
     def active(self):
-        return {p: t for p, t in self.ports.items() if p not in self.released}
+        return [p for p in self.ports if p not in self.released]
+
+    def _ip(self, *args, check=False):
+        import subprocess
+        r = subprocess.run(["/usr/sbin/ip", *args], capture_output=True, text=True)
+        if check and r.returncode:
+            log.error("ip %s: %s", " ".join(args), r.stderr.strip())
+        return r
 
     def apply(self):
         import subprocess
-        # nat 체인은 연결의 첫 패킷만 본다 → log는 연결당 한 줄
-        pre = [f"    ip daddr {self.addr} tcp dport {p} log prefix \"{self.prefix} \" level info dnat to {to}"
-               for p, to in sorted(self.active().items())]
-        post = [f"    ip daddr {to.rsplit(':', 1)[0]} tcp dport {to.rsplit(':', 1)[1]} masquerade" for p, to in sorted(self.active().items())]
-        text = (f"table ip {self.table}\ndelete table ip {self.table}\ntable ip {self.table} {{\n"
-                f"  chain pre {{\n    type nat hook prerouting priority dstnat; policy accept;\n" + "\n".join(pre) + "\n  }\n"
-                f"  chain post {{\n    type nat hook postrouting priority srcnat; policy accept;\n" + "\n".join(post) + "\n  }\n}\n")
-        try:
-            with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
-                f.write("1")
-        except OSError as e:
-            log.warning("ip_forward: %s", e)
+        for path, val in (("/proc/sys/net/ipv4/ip_forward", "1"), (f"/proc/sys/net/ipv4/conf/{self.tunnel}/rp_filter", "2"),
+                          (f"/proc/sys/net/ipv4/conf/{self.iface}/rp_filter", "2")):
+            try:
+                with open(path, "w") as f:
+                    f.write(val)
+            except OSError as e:
+                log.warning("%s: %s", path, e)
+        # local 경로표보다 먼저 봐야 이 서버 주소로 온 패킷을 가로챌 수 있다(local 규칙 pref 0 → 1000)
+        rules = self._ip("rule", "show").stdout
+        if not re.search(r"^1000:\s+from all lookup local", rules, re.M):
+            self._ip("rule", "add", "pref", "1000", "lookup", "local", check=True)
+        if re.search(r"^0:\s+from all lookup local", rules, re.M):
+            self._ip("rule", "del", "pref", "0", "lookup", "local", check=True)
+        self._ip("route", "replace", f"{self.addr}/32", "dev", self.tunnel, "table", str(self.rt), check=True)
+        while self._ip("rule", "del", "pref", str(self.pref), "lookup", str(self.rt)).returncode == 0:
+            pass
+        for p in self.active():
+            self._ip("rule", "add", "pref", str(self.pref), "iif", self.iface, "to", self.addr, "ipproto", "tcp", "dport", str(p),
+                     "lookup", str(self.rt), check=True)
+        # 경보용 로그만(새 연결의 첫 패킷). 넘기는 일은 정책 규칙이 한다
+        logs = [f"    iifname \"{self.iface}\" ip daddr {self.addr} tcp dport {p} ct state new log prefix \"{self.prefix} \" level info"
+                for p in self.active()]
+        text = (f"table ip {self.table}\ndelete table ip {self.table}\ntable ip {self.table} {{\n  chain pre {{\n"
+                f"    type filter hook prerouting priority -150; policy accept;\n" + "\n".join(logs) + "\n  }\n}\n")
         r = subprocess.run(["/usr/sbin/nft", "-f", "-"], input=text, text=True, capture_output=True)
         if r.returncode:
             log.error("nft: %s", r.stderr.strip())
-        else:
-            log.info("넘기는 포트: %s", ", ".join(str(p) for p in sorted(self.active())) or "-")
+        log.info("넘기는 포트: %s", ", ".join(map(str, self.active())) or "-")
+        # 관리 쪽이 읽는 상태(양보한 포트는 여기서 다시 잡지 않는다 — 실제 서비스가 재시작하는 틈에 가로채면 운영 트래픽을 넘김)
+        try:
+            tmp = "/var/lib/moa-notify/ports.json.tmp"
+            with open(tmp, "w") as f:
+                json.dump({"active": self.active(), "released": sorted(self.released)}, f)
+            os.replace(tmp, "/var/lib/moa-notify/ports.json")
+        except OSError as e:
+            log.warning("ports.json: %s", e)
 
     def feed(self, line):
         m = RE_KLOG.match(line)

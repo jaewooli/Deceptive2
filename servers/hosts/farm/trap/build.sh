@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # 트랩 컨테이너 — Illusive 트랩 서버(US10404747): 운영 서버(EDH)의 안 쓰는 포트로 온 연결을 받아 진짜 서비스로 응답.
-# EDH마다 하나(hostname = 그 EDH, 같은 Ubuntu 클라우드 이미지·같은 패치 수준 — 공격자에겐 EDH가 그 서비스를 돌리는 것으로 보임)
+# EDH마다 하나. 컨테이너는 **EDH 주소를 자기 NIC에** 갖고(hostname도 EDH), EDH와는 WireGuard 터널로만 잇는다(주소 변환 없음 —
+# 11/22 masquerade로 했더니 Redis CLIENT LIST에 addr=EDH 자신·laddr=트랩 내부 주소가 보여 중계가 드러남)
 # farm에서 root로, 여러 번 실행해도 결과가 같다.
-#   sudo ./build.sh <컨테이너 이름> <EDH 호스트 이름> <번호 1~250> <서비스: redis|nginx-auth> <바깥 포트> <서비스 포트> <farm LAN 주소>
-# 망: 컨테이너 host0 = 10.201.<번호>.2/30, 게이트웨이 .1(farm veth). farm은 <farm LAN 주소>:<바깥 포트> → 컨테이너:<서비스 포트>
+#   sudo ./build.sh <컨테이너> <EDH 이름> <번호 1~250> <서비스: redis|nginx-auth> <서비스 포트> <EDH 주소/접두> <EDH 서브넷 게이트웨이> <EDH 터널 공개키>
+# farm 쪽: 터널 edh<번호>(포트 51820+번호, 상대 = 그 EDH, AllowedIPs 0.0.0.0/0 → EDH마다 인터페이스 하나)
+#   터널로 들어온 것(목적지 = EDH 주소) → 컨테이너 veth, 컨테이너 응답 → 그 터널. farm 자신의 경로표는 건드리지 않는다(정책 라우팅)
 # 루트파일시스템: 공식 클라우드 이미지 루트 tarball(SHA256 검증) — debootstrap보다 EC2 서버와 패키지가 같다(11/22 stg-01 측정 D2·D3)
 set -euo pipefail
-NAME=${1:?이름}; EDH=${2:?EDH 이름}; N=${3:?번호}; SVC=${4:?서비스}; EXT=${5:?바깥 포트}; INT=${6:?서비스 포트}; FARM=${7:?farm 주소}
+NAME=${1:?이름}; EDH=${2:?EDH 이름}; N=${3:?번호}; SVC=${4:?서비스}; INT=${5:?서비스 포트}; EADDR=${6:?EDH 주소/접두}; GW=${7:?게이트웨이}; EPUB=${8:?EDH 공개키}
+EIP=${EADDR%/*}; WG=edh$N; T_IN=$((140 + N)); T_OUT=$((190 + N))
 ROOT=/var/lib/machines/$NAME
 IMG=https://cloud-images.ubuntu.com/noble/current
 TAR=/var/cache/trap/noble-server-cloudimg-amd64-root.tar.xz
 NS=(systemd-nspawn -q --settings=false --register=no --resolv-conf=bind-uplink -D "$ROOT" --pipe --)
 export DEBIAN_FRONTEND=noninteractive
-dpkg -s systemd-container nftables >/dev/null 2>&1 || apt-get install -y -q systemd-container nftables >/dev/null
+dpkg -s systemd-container wireguard-tools >/dev/null 2>&1 || apt-get install -y -q systemd-container wireguard-tools >/dev/null
 
 install -d /var/cache/trap
 if [ ! -f "$TAR" ]; then
@@ -37,8 +40,8 @@ cat > "$ROOT/etc/systemd/network/10-host0.network" <<EOF
 Name=host0
 
 [Network]
-Address=10.201.$N.2/30
-Gateway=10.201.$N.1
+Address=$EADDR
+Gateway=$GW
 EOF
 
 # 같은 패치 수준 + 서비스(떠 있으면 멈춘 뒤 — 같은 디렉터리로 nspawn을 두 번 못 띄움)
@@ -68,35 +71,48 @@ EOF
 esac
 "${NS[@]}" systemctl enable systemd-networkd >/dev/null 2>&1 || true
 
-# farm 쪽: 컨테이너 veth 게이트웨이 + 바깥 포트 → 컨테이너
-install -d /etc/systemd/nspawn /usr/local/lib/relay "/etc/systemd/system/systemd-nspawn@$NAME.service.d"
-printf '[Exec]\nBoot=yes\nPrivateUsers=no\n[Network]\nVirtualEthernet=yes\n' > "/etc/systemd/nspawn/$NAME.nspawn"
-# veth 주소는 networkd 설정으로 고정한다 — 스크립트로 넣으면 기본 80-container-ve.network가 다시 설정하며 지운다(11/22 경쟁)
+# farm 쪽: EDH 터널 + 컨테이너 veth(게이트웨이 .1 + proxy ARP, networkd로 고정 — 11/22 경쟁)
+install -d -m 0700 /etc/wireguard
+[ -f "/etc/wireguard/$WG.key" ] || (umask 077; wg genkey > "/etc/wireguard/$WG.key")
+cat > "/etc/wireguard/$WG.conf" <<EOF
+[Interface]
+PrivateKey = $(cat "/etc/wireguard/$WG.key")
+ListenPort = $((51820 + N))
+Table = off
+MTU = 1380
+
+[Peer]
+PublicKey = $EPUB
+AllowedIPs = 0.0.0.0/0
+EOF
+chmod 600 "/etc/wireguard/$WG.conf"
+systemctl enable "wg-quick@$WG" >/dev/null 2>&1; systemctl restart "wg-quick@$WG"
 cat > "/etc/systemd/network/10-ve-$NAME.network" <<EOF
 [Match]
 Name=ve-$NAME
 
 [Network]
-Address=10.201.$N.1/30
+Address=$GW/32
+IPv4ProxyARP=yes
 LinkLocalAddressing=no
 IPv6AcceptRA=no
 ConfigureWithoutCarrier=yes
 EOF
 systemctl enable --now systemd-networkd >/dev/null 2>&1 || true
 networkctl reload 2>/dev/null || true
+install -d /etc/systemd/nspawn /usr/local/lib/relay "/etc/systemd/system/systemd-nspawn@$NAME.service.d"
+printf '[Exec]\nBoot=yes\nPrivateUsers=no\n[Network]\nVirtualEthernet=yes\n' > "/etc/systemd/nspawn/$NAME.nspawn"
 cat > "/usr/local/lib/relay/trap-$NAME-up" <<EOF
 #!/bin/sh
-sysctl -q -w net.ipv4.ip_forward=1
-nft -f - <<NFT
-table ip trap_$N
-delete table ip trap_$N
-table ip trap_$N {
-  chain pre {
-    type nat hook prerouting priority dstnat; policy accept;
-    ip daddr $FARM tcp dport $EXT dnat to 10.201.$N.2:$INT
-  }
-}
-NFT
+for i in \$(seq 50); do ip link show ve-$NAME >/dev/null 2>&1 && break; sleep 0.2; done
+sysctl -q -w net.ipv4.ip_forward=1 net.ipv4.conf.all.rp_filter=2 net.ipv4.conf.ve-$NAME.rp_filter=2 net.ipv4.conf.$WG.rp_filter=2
+# 터널에서 온 것(목적지 = EDH 주소) → 컨테이너. farm 자신의 EDH 가는 길(main)은 그대로
+ip rule show pref $((60 + N)) | grep -q . || ip rule add pref $((60 + N)) iif $WG lookup $T_IN
+ip route replace $EIP/32 dev ve-$NAME table $T_IN
+# 컨테이너 응답 → 그 EDH 터널
+ip rule show pref $((61 + N + 100)) | grep -q . || ip rule add pref $((61 + N + 100)) iif ve-$NAME lookup $T_OUT
+ip route replace default dev $WG table $T_OUT
+nft delete table ip trap_$N 2>/dev/null || true
 EOF
 chmod 755 "/usr/local/lib/relay/trap-$NAME-up"
 printf '[Service]\nExecStartPost=/usr/local/lib/relay/trap-%s-up\n' "$NAME" > "/etc/systemd/system/systemd-nspawn@$NAME.service.d/relay.conf"
@@ -104,4 +120,5 @@ systemctl daemon-reload
 systemctl enable "systemd-nspawn@$NAME" >/dev/null 2>&1
 systemctl restart "systemd-nspawn@$NAME"
 for i in $(seq 60); do systemd-run -M "$NAME" -q --wait -P systemctl is-system-running --wait >/dev/null 2>&1 && break; sleep 1; done
-echo "trap $NAME($EDH) $SVC: $FARM:$EXT → 10.201.$N.2:$INT — $(systemd-run -M "$NAME" -q --wait -P sh -c "hostname; ss -Hltn | awk '{print \$4}' | tr '\n' ' '")"
+echo "farm_tunnel_public_key=$(wg pubkey < /etc/wireguard/$WG.key) port=$((51820 + N))"
+echo "trap $NAME($EDH) $SVC: 터널 $WG → $EIP:$INT — $(systemd-run -M "$NAME" -q --wait -P sh -c "hostname; ss -Hltn | awk '{print \$4}' | tr '\n' ' '")"

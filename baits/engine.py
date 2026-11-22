@@ -90,7 +90,7 @@ def contexts():
 
 def anchor_key(tname, host, a):
     pick = {"env_db_url": ("path", "key"), "ssh_config": ("user",), "history": ("user",), "aws_profile": ("user",),
-            "agent_session": ("user",), "sync_service": ("name",)}[tname]
+            "agent_session": ("user",), "sync_service": ("name",), "decoy_port": ("port",), "cache_hint": ("path",)}[tname]
     return f"{tname}:{host}:" + ":".join(str(a[k]) for k in pick)
 
 
@@ -105,10 +105,15 @@ def plan(r, ctxs):
     active = {p["anchor_key"]: pid for pid, p in r["placements"].items() if p["status"] == "active"}
     used = {p["ident"]["value"] for p in r["placements"].values()}
     new, seen = [], set()
+    live_ports = [{"host": p["host"], "service": p["anchor"]["service"], "port": p["anchor"]["port"]}
+                  for p in r["placements"].values() if p["type"] == "decoy_port" and p["status"] == "active"]
     for host, ctx in ctxs.items():
+        ctx["_decoy_ports"] = live_ports
         for tname, t in T.TYPES.items():
-            for a in t.match(ctx, host):
+            for a in (t.match(ctx, host, dests()) if tname == "decoy_port" else t.match(ctx, host)):
                 key = anchor_key(tname, host, a)
+                if key in seen:  # 같은 파일을 여러 서비스가 쓰면 규칙이 같은 자리를 여러 번 찾는다(11/22 중복 배치)
+                    continue
                 seen.add(key)
                 if key in active:
                     continue
@@ -146,7 +151,7 @@ def split_ops(placements, mode):
     by, index = {}, {}
     for pid, p in placements:
         for i, op in enumerate(p["ops"]):
-            h = op["decoy"] if op["kind"] == "decoy_key" else p["host"]
+            h = op["decoy"] if op["kind"] == "decoy_key" else op.get("on_host", p["host"])
             index.setdefault(h, []).append((pid, i))
             by.setdefault(h, []).append(op)
     return by, index
@@ -184,10 +189,74 @@ def _run(by, index, mode):
                 tail = lambda x: (x or "")[-1500:]
                 raise SystemExit(f"{h}: {res.get('msg')}\n--- stderr\n{tail(res.get('stderr'))}\n--- stdout\n{tail(res.get('stdout'))}")
             if res.get("stdout", "").startswith('{"results"'):
-                for x in json.loads(res["stdout"])["results"]:
+                j = json.loads(res["stdout"])
+                LAST_DATA[h] = j.get("data", {})
+                for x in j["results"]:
                     pid, i = index[h][x["i"]]
                     states.setdefault(pid, []).append((h, i, x["state"]))
     return states
+
+
+LAST_DATA = {}
+SRV = HERE.parent / "servers"
+
+
+def one(host, ops, mode="apply"):
+    """한 호스트에 작업 묶음 하나 → (상태들, 돌려받은 데이터)"""
+    LAST_DATA.pop(host, None)
+    st = _run({host: ops}, {host: [("x", i) for i in range(len(ops))]}, mode)
+    states = [x[2] for x in st.get("x", [])]
+    data = LAST_DATA.get(host, {})
+    if "failed" in states:
+        raise SystemExit(f"{host}: 실패 {data.get('error', '')}")
+    return states, data
+
+
+def edh_ports(r, host, extra=None, drop=None):
+    ports = {p["anchor"]["port"] for p in r["placements"].values()
+             if p["type"] == "decoy_port" and p["host"] == host and p["status"] == "active"}
+    if extra:
+        ports.add(extra)
+    if drop:
+        ports.discard(drop)
+    return sorted(ports)
+
+
+def place_decoy_port(r, pid):
+    """EDH 키 → farm 트랩(EDH 공개키) → EDH 터널(farm 공개키) → 공통 데몬의 ports 설정"""
+    p = r["placements"][pid]
+    a, host = p["anchor"], p["host"]
+    farm = dests()["farm"]
+    slots = r.setdefault("farm_slots", {})
+    n = slots.setdefault(host, max(slots.values(), default=0) + 1)
+    _, d = one(host, [{"kind": "wg_key", "name": "wg0", "as": "edh_pub"}])
+    trap = f"trap-{host}"
+    _, d2 = one(farm["host"], [{"kind": "run", "script": (SRV / "hosts/farm/trap/build.sh").read_text(),
+                                "argv": [trap, host, str(n), a["service"], str(a["port"]), a["addr"], a["gw"], d["edh_pub"]],
+                                "collect": ["farm_tunnel_public_key"]}])
+    one(host, [{"kind": "run", "script": (SRV / "detection/edh-tunnel.sh").read_text(),
+                "argv": [f"{farm['ip']}:{51820 + n}", d2["farm_tunnel_public_key"]]},
+               {"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": edh_ports(r, host, extra=a["port"])}])
+    # 이후 검사(verify)·회수에 쓰는 작업: EDH 설정 + farm 트랩 서비스
+    p["ops"] = [{"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": edh_ports(r, host, extra=a["port"])},
+                {"kind": "unit", "name": f"systemd-nspawn@{trap}.service", "on_host": farm["host"]}]
+    p["farm_slot"] = n
+
+
+def recall_decoy_port(r, pid):
+    p = r["placements"][pid]
+    a, host = p["anchor"], p["host"]
+    rest = edh_ports(r, host, drop=a["port"])
+    one(host, [{"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": rest}])
+    if not rest:  # 이 EDH에 넘길 포트가 없으면 터널도 내린다
+        one(host, [{"kind": "run", "script": "systemctl disable --now wg-quick@wg0 2>/dev/null; rm -f /etc/wireguard/wg0.conf /etc/wireguard/wg0.key\n", "argv": []}])
+        farm = dests()["farm"]
+        n = r.get("farm_slots", {}).get(host)
+        one(farm["host"], [{"kind": "run", "argv": [], "script": f"""systemctl disable --now systemd-nspawn@trap-{host} wg-quick@edh{n} 2>/dev/null
+rm -rf /etc/systemd/nspawn/trap-{host}.nspawn /etc/systemd/system/systemd-nspawn@trap-{host}.service.d /usr/local/lib/relay/trap-trap-{host}-up \
+  /etc/systemd/network/10-ve-trap-{host}.network /etc/wireguard/edh{n}.conf /etc/wireguard/edh{n}.key
+ip rule del pref {60 + n} 2>/dev/null; ip rule del pref {161 + n} 2>/dev/null; systemctl daemon-reload
+"""}])
 
 
 def alert(e):
@@ -222,7 +291,11 @@ def cmd_apply(a):
     for pid in pids:
         p = r["placements"][pid]
         try:
-            states = run_ops([(pid, p)], "apply")
+            if p["type"] == "decoy_port":
+                place_decoy_port(r, pid)
+                states = {pid: [(p["host"], 0, "changed")]}
+            else:
+                states = run_ops([(pid, p)], "apply")
         except SystemExit as e:
             p["status"] = "failed"
             event(r, "failed", pid, type=p["type"], host=p["host"], detail=str(e)[-300:])
@@ -240,6 +313,15 @@ def cmd_verify(a):
     r = load_reg()
     live = [(pid, p) for pid, p in r["placements"].items() if p["status"] == "active"]
     states = run_ops(live, "check")
+    for pid, st in list(states.items()):
+        if any(x == "released" for _, _, x in st):
+            p = r["placements"][pid]
+            port = p["anchor"].get("port")
+            if port in LAST_DATA.get(p["host"], {}).get("released", []) or p["type"] == "decoy_port":
+                p["status"] = "released"
+                alert(event(r, "released", pid, type=p["type"], host=p["host"],
+                            detail=f"{port} 포트를 실제 프로그램이 쓰기 시작해 디코이에서 뺌(특허: 양보). 비면 다음 plan에서 다시 제안"))
+                states.pop(pid)
     drift = [pid for pid, st in states.items() if any(s == "drift" for _, _, s in st)]
     reopen = [pid for pid, st in states.items() if any(s == "gone" for _, _, s in st) and pid not in drift]
     if reopen:  # 잊힌 세션은 재부팅으로 사라지는 게 자연스럽다 → 경보 없이 "다시 열린 세션"으로
@@ -285,7 +367,10 @@ def cmd_recall(a):
     r = load_reg()
     targets = [pid for pid, p in r["placements"].items() if p["status"] in ("active", "failed", "pending")
                and (a.all or pid in a.ids or (a.host and p["host"] == a.host))]
-    run_ops([(pid, r["placements"][pid]) for pid in targets], "absent")
+    for pid in [t for t in targets if r["placements"][t]["type"] == "decoy_port"]:
+        recall_decoy_port(r, pid)
+        r["placements"][pid]["status"] = "recalled"
+    run_ops([(pid, r["placements"][pid]) for pid in targets if r["placements"][pid]["type"] != "decoy_port"], "absent")
     for pid in targets:
         r["placements"][pid]["status"] = "recalled"
         event(r, "recalled", pid)

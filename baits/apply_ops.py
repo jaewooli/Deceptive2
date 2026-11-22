@@ -8,6 +8,13 @@
 """
 import json
 import os
+import shutil
+
+DATA = {}
+
+
+def shutil_which(x):
+    return shutil.which(x)
 import pwd
 import grp
 import sys
@@ -214,6 +221,77 @@ def do(op, mode):
         if os.path.exists(kp):
             os.remove(kp)
         return "changed" if find() else "failed"
+    if k == "wg_key":
+        # 터널 키(없으면 만듦) → 공개키를 돌려준다
+        import subprocess
+        kp = f"/etc/wireguard/{op['name']}.key"
+        if mode == "absent":
+            return "absent"
+        if not shutil_which("wg"):
+            subprocess.run(["apt-get", "install", "-y", "-q", "wireguard-tools"], env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"),
+                           capture_output=True, check=True)
+        os.makedirs("/etc/wireguard", mode=0o700, exist_ok=True)
+        if not os.path.exists(kp):
+            key = subprocess.run(["wg", "genkey"], capture_output=True, text=True, check=True).stdout
+            fd = os.open(kp, os.O_WRONLY | os.O_CREAT, 0o600); os.write(fd, key.encode()); os.close(fd)
+        DATA[op.get("as", "pub")] = subprocess.run(["wg", "pubkey"], input=open(kp).read(), capture_output=True, text=True).stdout.strip()
+        return "ok"
+    if k == "run":
+        # 스크립트를 임시 파일로 실행하고 지운다(서버에 남기지 않음). 인자는 공개 값만
+        import subprocess, tempfile
+        if mode == "check":
+            return "ok"
+        if mode == "absent" and not op.get("on_absent"):
+            return "absent"
+        argv = op["on_absent"] if mode == "absent" else op["argv"]
+        fd, sp = tempfile.mkstemp(prefix=".r", dir="/root"); os.write(fd, op["script"].encode()); os.close(fd)
+        try:
+            r = subprocess.run(["/bin/bash", sp, *argv], capture_output=True, text=True)
+        finally:
+            os.remove(sp)
+        for line in r.stdout.splitlines():
+            if "=" in line and line.split("=", 1)[0] in op.get("collect", []):
+                DATA[line.split("=", 1)[0]] = line.split("=", 1)[1].split()[0]
+        if r.returncode:
+            DATA["error"] = (r.stderr or r.stdout)[-800:]
+            return "failed"
+        return "absent" if mode == "absent" else "changed"
+    if k == "ports_config":
+        # 세 서버 공통 데몬 설정에서 ports 감시만 바꾼다(다른 감시·웹훅은 그대로) → 다시 시작
+        import subprocess
+        p = "/etc/moa-notify/config.json"
+        cfg = json.load(open(p))
+        w = cfg.setdefault("watch", {})
+        cur = w.get("ports", {})
+        want_ports = sorted(set(op["ports"]))
+        same = cur.get("enabled") and sorted(int(x["port"]) for x in cur.get("ports", [])) == want_ports and cur.get("address") == op["address"]
+        if mode == "check":
+            try:
+                st = json.load(open("/var/lib/moa-notify/ports.json"))
+            except (OSError, ValueError):
+                st = {}
+            rel = sorted(set(st.get("released", [])) & set(want_ports))
+            if rel:
+                DATA["released"] = rel  # 실제 프로그램이 그 포트를 쓰기 시작해 넘기기를 멈춤 — 관리 쪽이 판단
+                return "released"
+            return "ok" if same or not want_ports else "drift"
+        try:
+            rel_now = set(json.load(open("/var/lib/moa-notify/ports.json")).get("released", [])) & set(want_ports)
+        except (OSError, ValueError):
+            rel_now = set()
+        if same and mode == "apply" and not rel_now:
+            return "ok"
+        # 설정이 같아도 원하는 포트가 양보 상태면 다시 시작(관리 쪽이 다시 쓰기로 정함 — 데몬이 시작 때 비었는지 다시 확인)
+        if want_ports:
+            w["ports"] = {"enabled": True, "path": "/var/log/kern.log", "address": op["address"], "iface": op["iface"], "tunnel": "wg0",
+                          "ports": [{"port": x} for x in want_ports]}
+        else:
+            w.pop("ports", None)
+        tmp = p + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.write(fd, json.dumps(cfg, ensure_ascii=False, indent=1).encode()); os.close(fd)
+        os.replace(tmp, p)
+        subprocess.run(["systemctl", "restart", "moa-notify"], check=True)
+        return "changed"
     if k == "decoy_audit":
         # 옵션 없는 일반 키 중 레지스트리에 없는 것 = 고아 미끼(또는 사람이 넣은 키). 보고만 한다
         home = pwd.getpwnam(op["user"]).pw_dir
@@ -248,7 +326,7 @@ def main():
     res = []
     for i, op in enumerate(ops):
         res.append({"i": i, "state": do(op, mode)})
-    print(json.dumps({"results": res}))
+    print(json.dumps({"results": res, "data": DATA}))
 
 
 if __name__ == "__main__":

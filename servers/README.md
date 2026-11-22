@@ -18,4 +18,6 @@
 | `hosts/sensor/` | sensor | 투영 주소로 온 연결을 출발지 그대로 WireGuard로 farm에(정책 라우팅, 서비스 없음) |
 | `hosts/farm/` | farm | WireGuard 끝점 + systemd-nspawn 컨테이너 망(컨테이너 veth에 게이트웨이 .1, proxy ARP) |
 | `hosts/farm/stg-01/` | farm 안 컨테이너 | 옛 스테이징 디코이 루트파일시스템(`build.sh`)·역할 |
+| `hosts/farm/trap/` | farm 안 컨테이너 | 트랩(Illusive US10404747) — EDH마다 하나, EDH 주소·hostname, 공식 클라우드 이미지 + 진짜 서비스, EDH별 WireGuard |
+| `detection/edh-tunnel.sh` | web-01·app-01(EDH) | 안 쓰는 포트를 farm 트랩으로 넘기는 터널 인터페이스(어느 포트인지는 moa-notify `ports` 감시가 정책 규칙으로) |
 - `base/`(공통 에이전트)는 sensor·farm에도 깐다(AWS 관리·로그). stg-01 컨테이너 안에 무엇이 같고 다른지는 진정성 검증 세트로 잰다

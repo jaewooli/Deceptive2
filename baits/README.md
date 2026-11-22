@@ -23,7 +23,9 @@ Illusive식 **맥락 기반 원격 배포**(`docs/01-vendor-feature-map.md` 문�
   | `aws_profile`(T6형) | 그 계정의 cron(또는 cron이 부르는 스크립트)이 aws를 씀 | `[backup-legacy]` 장기 키(로컬은 형식만, AWS는 IAM 실제 키) |
   | `agent_session`(T4형) | 히스토리 있는 사람 계정 + 나가는 ssh + tmux·ssh-agent 있음 | **잊힌 tmux 세션의 ssh-agent에만** 키(디스크엔 없음). 재부팅으로 사라지면 경보 없이 다시 엶 |
   | `sync_service`(T5형) | 앱 환경 파일에 꺼진 기능 플래그(`*_ENABLED`) + 그 기능의 DB 주소 | 그 기능의 동기화 서비스가 대기만 하며 살아 있음, 유닛 `Environment=`에 디코이 DB 계정(디코이로 가는 정상 트래픽 없음) |
-- 레지스트리 상태: pending(서버 손대기 전 기록) → active / failed(회수로 정리) / retired(교체됨, 계속 감시) / recalled
+  | `decoy_port`(11/22, Illusive US10404747) | 운영 서버(EDH)의 역할(postgres → Redis 6379, nginx → 내부 관리 8080) + 그 포트를 안 씀 | EDH의 안 쓰는 포트 → **터널로 farm 트랩**(EDH 주소를 자기 NIC에 가진 컨테이너, hostname = EDH, 진짜 서비스). 단계: EDH 키 → farm 트랩 → EDH 터널 → 공통 데몬 `ports` 설정 |
+  | `cache_hint`(11/22) | 앱이 DB로 쓰는 서버에 **활성** Redis 디코이 포트가 있음(특허: 활성 디코이 포트만 가리킴) | 보류된 세션 캐시 설정이 주석으로 남은 모양(앱 코드에 없는 변수라 살아 있는 설정이면 git grep에서 어색) |
+- 레지스트리 상태: pending(서버 손대기 전 기록) → active / failed(회수로 정리) / retired(교체됨, 계속 감시) / recalled / **released**(디코이 포트를 실제 프로그램이 쓰기 시작해 데몬이 양보 — verify가 상태 파일을 읽어 표시, 포트가 비면 다음 plan이 다시 제안. 데몬이 스스로 다시 잡지 않는 이유: 실제 서비스 재시작 틈에 가로채면 운영 트래픽을 트랩으로 넘김) / duplicate
 - 작업 순서: 출발 서버 먼저, 성공해야 디코이 쪽. verify는 디코이 authorized_keys의 모르는 일반 키도 경보(자동 삭제 안 함)
 - 남은 것: 옛 ID(retired 키) 사용 탐지엔 sshd `LogLevel VERBOSE`가 세 서버 공통으로 필요(CIS 권고) — 탐지 단계에서
 
