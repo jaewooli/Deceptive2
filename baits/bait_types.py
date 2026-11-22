@@ -227,10 +227,17 @@ while True:
     try:
         s = socket.create_connection((u.hostname, u.port or 5432), timeout=10)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        time.sleep(random.randint(1800, 7200))
+        s.settimeout(60)
+        until = time.time() + random.randint(1800, 7200)
+        while time.time() < until:  # 1분마다 살아 있는지 — 끊기면 곧 다시 잡는다
+            try:
+                if not s.recv(1):
+                    break
+            except socket.timeout:
+                continue
         s.close()
     except OSError:
-        time.sleep(300)
+        time.sleep(60)
 """
 
     def match(self, ctx, host):

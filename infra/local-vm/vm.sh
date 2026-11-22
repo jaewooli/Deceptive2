@@ -10,6 +10,8 @@
 #   VM_LAN_TYPE=dgram VM_LAN=local.type=inet,local.host=127.0.0.1,local.port=10001,remote.type=inet,remote.host=127.0.0.1,remote.port=10002 VM_LAN_MAC=...
 #   상대 VM은 포트를 맞바꿔서. (socket listen/connect는 11/22 로컬에서 한 방향만 흘렀음)
 # VM_EXTRA_FWD: 추가 포워딩(게스트 보조 IP로), 예) hostfwd=tcp:127.0.0.1:2241-10.0.2.16:22,hostfwd=...
+# virtio-balloon free page reporting: 게스트의 빈 메모리를 호스트에 돌려준다(11/22: 게스트는 400~540MB를 쓰는데
+#   QEMU가 페이지 캐시까지 붙잡아 870~1,226MB → 호스트 7.9GB에 3~4대만 떠서 VM을 계속 껐다 켬)
 # KVM: 계정이 kvm 그룹에 없으면 TCG(소프트웨어 에뮬레이션)로 돌아 느리다.
 #   한 번만: sudo usermod -aG kvm "$USER"  후 Windows에서 wsl --shutdown
 set -euo pipefail
@@ -79,6 +81,7 @@ up() {
     -device virtio-net-pci,netdev=n0 \
     ${VM_LAN:+-netdev ${VM_LAN_TYPE:-socket},id=n1,$VM_LAN -device virtio-net-pci,netdev=n1,mac=${VM_LAN_MAC:?VM_LAN_MAC}} \
     -smbios type=1,serial="ds=nocloud;s=http://10.0.2.2:$SEED_PORT/" \
+    -device virtio-balloon-pci,free-page-reporting=on \
     -display none -serial file:"$DIR/$NAME-console.log" \
     -daemonize -pidfile "$DIR/$NAME.pid"
   echo "VM 시작 ($(accel | cut -d' ' -f2)), 콘솔 로그: $DIR/$NAME-console.log"

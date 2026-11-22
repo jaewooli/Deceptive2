@@ -51,16 +51,25 @@ LinkLocalAddressing=no
 IPv6AcceptRA=no
 ConfigureWithoutCarrier=yes
 EOF
+# networkd는 기본값으로 자기가 만들지 않은 정책 규칙·경로를 지운다(wg-quick PostUp 규칙이 사라짐 — 11/22 재부팅 시험)
+install -d /etc/systemd/networkd.conf.d
+printf '[Network]\nManageForeignRoutingPolicyRules=no\nManageForeignRoutes=no\n' > /etc/systemd/networkd.conf.d/10-keep-foreign.conf
 systemctl enable --now systemd-networkd >/dev/null 2>&1 || true
+# 세션 안에서 바로 재시작하면 관리 접속(SSH)이 끊겨 멈춘다(11/22) → 분리해서
+systemd-run --on-active=1 --unit=networkd-reload-$$ systemctl restart systemd-networkd >/dev/null 2>&1 || true
+sleep 4
 networkctl reload 2>/dev/null || true
 cat > /usr/local/lib/relay/veth-up <<EOF
 #!/bin/sh
-# systemd-nspawn@$NAME 시작 뒤: 투영 주소 경로, 응답은 터널로
+# systemd-nspawn@$NAME 시작 뒤: 투영 주소 경로, 응답은 터널로. 실패해도 컨테이너를 내리지 않는다(11/22: veth보다 먼저 돌아 실패 → 컨테이너가 같이 내려감)
 for i in \$(seq 50); do ip link show $VETH >/dev/null 2>&1 && break; sleep 0.2; done
-sysctl -q -w net.ipv4.conf.$VETH.rp_filter=2
+sysctl -q -w net.ipv4.conf.$VETH.rp_filter=2 2>/dev/null
 ip route replace $X/32 dev $VETH
+# 컨테이너 경로가 빠지면 LAN으로 새지 않고 버린다(farm과 센서가 같은 망이면 루프 — 11/22)
+ip route replace blackhole $X/32 metric 1000 2>/dev/null
 ip rule show pref 50 | grep -q . || ip rule add pref 50 iif $VETH lookup $T_OUT
 ip route replace default dev relay table $T_OUT
+exit 0
 EOF
 chmod 755 /usr/local/lib/relay/veth-up
 cat > /etc/systemd/system/systemd-nspawn@"$NAME".service.d/relay.conf <<EOF

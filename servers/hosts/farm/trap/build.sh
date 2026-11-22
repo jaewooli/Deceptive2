@@ -81,6 +81,14 @@ ListenPort = $((51820 + N))
 Table = off
 MTU = 1380
 
+# 터널 쪽 규칙·응답 경로는 터널 수명 주기에 묶는다(시작 스크립트로 하면 터널보다 먼저 돌아 빠짐 — 11/22 재부팅 시험)
+# EDH는 터널 안 주소(169.254.200.1)로 DNAT해 보낸다 → 여기서 다시 EDH 주소로 DNAT(컨테이너가 EDH 주소를 가짐). conntrack이 응답을 되돌림
+PostUp = nft -f - <<< "table ip edh_$N { chain pre { type nat hook prerouting priority dstnat; policy accept; iifname \"%i\" ip daddr 169.254.200.1 dnat to $EIP; }; }"
+PostUp = ip rule show pref $((60 + N)) | grep -q . || ip rule add pref $((60 + N)) iif %i lookup $T_IN
+PostUp = ip route replace default dev %i table $T_OUT
+PreDown = ip rule del pref $((60 + N)) 2>/dev/null || true
+PreDown = nft delete table ip edh_$N 2>/dev/null || true
+
 [Peer]
 PublicKey = $EPUB
 AllowedIPs = 0.0.0.0/0
@@ -97,25 +105,37 @@ IPv4ProxyARP=yes
 LinkLocalAddressing=no
 IPv6AcceptRA=no
 ConfigureWithoutCarrier=yes
+
+# veth 쪽 경로·규칙은 networkd가 링크가 생길 때 건다(선언형 — 순서 경쟁 없음)
+[Route]
+Destination=$EIP/32
+Table=$T_IN
+
+[RoutingPolicyRule]
+IncomingInterface=ve-$NAME
+Table=$T_OUT
+Priority=$((161 + N))
 EOF
+# networkd는 기본값으로 자기가 만들지 않은 정책 규칙·경로를 지운다(wg-quick PostUp 규칙이 사라짐 — 11/22 재부팅 시험)
+install -d /etc/systemd/networkd.conf.d
+printf '[Network]\nManageForeignRoutingPolicyRules=no\nManageForeignRoutes=no\n' > /etc/systemd/networkd.conf.d/10-keep-foreign.conf
 systemctl enable --now systemd-networkd >/dev/null 2>&1 || true
+# 세션 안에서 바로 재시작하면 관리 접속(SSH)이 끊겨 멈춘다(11/22) → 분리해서
+systemd-run --on-active=1 --unit=networkd-reload-$$ systemctl restart systemd-networkd >/dev/null 2>&1 || true
+sleep 4
 networkctl reload 2>/dev/null || true
 install -d /etc/systemd/nspawn /usr/local/lib/relay "/etc/systemd/system/systemd-nspawn@$NAME.service.d"
 printf '[Exec]\nBoot=yes\nPrivateUsers=no\n[Network]\nVirtualEthernet=yes\n' > "/etc/systemd/nspawn/$NAME.nspawn"
 cat > "/usr/local/lib/relay/trap-$NAME-up" <<EOF
 #!/bin/sh
-for i in \$(seq 50); do ip link show ve-$NAME >/dev/null 2>&1 && break; sleep 0.2; done
-sysctl -q -w net.ipv4.ip_forward=1 net.ipv4.conf.all.rp_filter=2 net.ipv4.conf.ve-$NAME.rp_filter=2 net.ipv4.conf.$WG.rp_filter=2
-# 터널에서 온 것(목적지 = EDH 주소) → 컨테이너. farm 자신의 EDH 가는 길(main)은 그대로
-ip rule show pref $((60 + N)) | grep -q . || ip rule add pref $((60 + N)) iif $WG lookup $T_IN
-ip route replace $EIP/32 dev ve-$NAME table $T_IN
-# 컨테이너 응답 → 그 EDH 터널
-ip rule show pref $((61 + N + 100)) | grep -q . || ip rule add pref $((61 + N + 100)) iif ve-$NAME lookup $T_OUT
-ip route replace default dev $WG table $T_OUT
+# 규칙·경로는 wg-quick(PostUp)·networkd가 건다. 여기선 커널 값만(없는 인터페이스는 건너뜀)
+sysctl -q -w net.ipv4.ip_forward=1 net.ipv4.conf.all.rp_filter=2
+for i in ve-$NAME $WG; do [ -e /proc/sys/net/ipv4/conf/\$i ] && sysctl -q -w net.ipv4.conf.\$i.rp_filter=2; done
 nft delete table ip trap_$N 2>/dev/null || true
+exit 0
 EOF
 chmod 755 "/usr/local/lib/relay/trap-$NAME-up"
-printf '[Service]\nExecStartPost=/usr/local/lib/relay/trap-%s-up\n' "$NAME" > "/etc/systemd/system/systemd-nspawn@$NAME.service.d/relay.conf"
+printf '[Unit]\nAfter=wg-quick@%s.service systemd-networkd.service\nWants=wg-quick@%s.service\n[Service]\nExecStartPost=/usr/local/lib/relay/trap-%s-up\n' "$WG" "$WG" "$NAME" > "/etc/systemd/system/systemd-nspawn@$NAME.service.d/relay.conf"
 systemctl daemon-reload
 systemctl enable "systemd-nspawn@$NAME" >/dev/null 2>&1
 systemctl restart "systemd-nspawn@$NAME"

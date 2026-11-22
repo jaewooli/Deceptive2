@@ -17,7 +17,9 @@ command -v wg >/dev/null || apt-get install -y -q wireguard-tools
 install -d -m 0700 /etc/wireguard
 [ -f /etc/wireguard/relay.key ] || (umask 077; wg genkey > /etc/wireguard/relay.key)
 
-# 투영 NIC: 투영 주소만, 기본 경로 없음(관리 NIC의 기본 경로를 건드리지 않게)
+# 투영 NIC: 투영 주소를 센서 자신의 주소로 두지 않는다 — 자기 주소면 local 경로표보다 먼저 가로채려고 local 규칙을 옮겨야 하는데,
+# networkd가 재시작하며 그 규칙을 지우면 센서 전체가 먹통이 된다(11/22 실측). 대신 투영 주소 경로를 터널로(main /32):
+#   AWS: VPC가 투영 ENI의 주소로 온 패킷을 ENI로 넘겨준다(OS 설정 불필요). 로컬 L2: proxy ARP가 대신 답한다(경로가 다른 NIC라서)
 cat > /etc/netplan/60-relay.yaml <<EOF
 network:
   version: 2
@@ -26,7 +28,9 @@ network:
       dhcp4: false
       dhcp6: false
       accept-ra: false
-      addresses: [$ADDR]
+      link-local: []
+      # 로컬 L2에서 proxy ARP가 답하려면 그 NIC에 IPv4가 하나 있어야 한다(투영과 무관한 링크 로컬). AWS는 하이퍼바이저가 ARP를 답해 불필요(무해)
+      addresses: [169.254.31.1/32]
 EOF
 chmod 600 /etc/netplan/60-relay.yaml
 netplan apply
@@ -35,32 +39,31 @@ cat > /etc/sysctl.d/60-relay.conf <<EOF
 net.ipv4.ip_forward = 1
 net.ipv4.conf.all.rp_filter = 2
 net.ipv4.conf.$IF.rp_filter = 2
-# 투영 주소를 가로채는 정책 규칙(pref 50) 때문에 커널 ARP 판단이 "내 주소 아님"으로 나온다 → 대신 답하게
-# (AWS VPC는 하이퍼바이저가 ARP를 답하므로 영향 없음. L2가 있는 곳에선 필요 — 11/22 로컬에서 확인)
 net.ipv4.conf.$IF.proxy_arp = 1
 EOF
 sysctl -q -p /etc/sysctl.d/60-relay.conf
+# networkd가 자기가 만들지 않은 규칙·경로를 지우지 않게(아래 응답 규칙)
+install -d /etc/systemd/networkd.conf.d
+printf '[Network]\nManageForeignRoutingPolicyRules=no\nManageForeignRoutes=no\n' > /etc/systemd/networkd.conf.d/10-keep-foreign.conf
+# 세션 안에서 바로 재시작하면 관리 접속(SSH)이 끊겨 멈춘다(11/22) → 분리해서
+systemd-run --on-active=1 --unit=networkd-reload-$$ systemctl restart systemd-networkd >/dev/null 2>&1 || true
+sleep 4
 
-# 응답 경로: 투영 서브넷은 직접, 그 밖은 게이트웨이로
-SUBNET=$(ip -4 route show dev "$IF" proto kernel scope link | awk 'NR==1{print $1}')
-if [ "$GW" = "-" ]; then OUT_DEFAULT="default dev $IF"; else OUT_DEFAULT="default via $GW dev $IF"; fi
+SUBNET=$(python3 -c "import ipaddress,sys; print(ipaddress.ip_interface(sys.argv[1]).network)" "$ADDR")
+if [ "$GW" = "-" ]; then OUT_DEFAULT="default dev $IF"; else OUT_DEFAULT="default via $GW dev $IF onlink"; fi
 cat > /etc/wireguard/relay.conf <<EOF
 [Interface]
 PrivateKey = $(cat /etc/wireguard/relay.key)
 Address = 10.200.0.1/30
 Table = off
 MTU = 1380
-# local 테이블보다 먼저: 투영 주소로 들어온 것은 팜으로(local 규칙을 pref 0 → 1000으로 옮김)
-PostUp = ip rule show pref 1000 | grep -q . || ip rule add pref 1000 lookup local
-PostUp = ip rule del pref 0 lookup local 2>/dev/null || true
-PostUp = ip rule show pref 50 | grep -q . || ip rule add pref 50 iif $IF to $X/32 lookup $T_IN
-PostUp = ip route replace $X/32 dev %i table $T_IN
-# 팜에서 돌아온 응답(출발지 = 투영 주소)은 투영 NIC로
+# 투영 주소 → 터널(main /32, 규칙 아님 — 지워져도 센서는 멀쩡, 터널이 다시 뜨면 다시 걸림)
+PostUp = ip route replace $X/32 dev %i
+# 팜에서 돌아온 응답(출발지 = 투영 주소)은 투영 NIC로(이 규칙이 지워지면 투영만 멈춤)
 PostUp = ip rule show pref 51 | grep -q . || ip rule add pref 51 iif %i from $X/32 lookup $T_OUT
 PostUp = ip route replace $SUBNET dev $IF table $T_OUT
 PostUp = ip route replace $OUT_DEFAULT table $T_OUT
 PostUp = iptables -t mangle -C FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
-PreDown = ip rule del pref 50 2>/dev/null || true
 PreDown = ip rule del pref 51 2>/dev/null || true
 
 [Peer]

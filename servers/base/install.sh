@@ -43,6 +43,10 @@ base() {
   install -m 0644 clamav/clamav-scan.cron /etc/cron.d/clamav-scan
   install -m 0644 clamav/clamav-scan.logrotate /etc/logrotate.d/clamav-scan
 
+  # networkd는 기본값으로 자기가 만들지 않은 경로·정책 규칙을 지운다(재시작·업데이트 때). 세 서버 공통(차이를 만들지 않음)
+  install -d /etc/systemd/networkd.conf.d
+  printf '[Network]\nManageForeignRoutingPolicyRules=no\nManageForeignRoutes=no\n' > /etc/systemd/networkd.conf.d/10-keep-foreign.conf
+
   agents
 }
 
