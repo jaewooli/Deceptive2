@@ -83,7 +83,7 @@ module "db_backup_01" {
   subnet_id            = module.network.internal_subnet_id
   security_group_id    = module.security.decoy_sg_id
   iam_instance_profile = module.ssm_role.instance_profile_name
-  secondary_ip_count   = 3
+  secondary_ip_count   = 0  # 11/22: 다중 주소 → 투영(sensor·farm, 11/28 추가)
 }
 
 # 11/28: modules/storage(S3 버킷), modules/iam-backup(backup-writer·backup-legacy), modules/cloudtrail

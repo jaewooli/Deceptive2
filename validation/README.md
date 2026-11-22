@@ -91,3 +91,16 @@ python3 -I validation/compare.py $D/lt-decoy.txt $D/lt-app.txt --probe $D/lt-dec
 - 측정 결과: 자동 층 단서 0(E3 ✓), 사람 층 디코이 전용 단서 2 → 4(D1·D3 = 넓이의 대가, 감시 장치는 아님 — 성공 기준 "디코이 전용 감시 흔적 0"은 유지)
 - 측정 도구 빈틈 2개를 고침: D1이 프로세스 *이름*만 비교해 같은 `sshd` 3개를 못 봄 → 데몬 명령줄 비교, D3가 활성 유닛 *파일*만 봐 템플릿 인스턴스(`ssh-addr@<IP>`)를 못 봄 → 실행 중인 서비스 비교. S3는 커널 차이(디코이만 재부팅해 새 커널)를 세지 않게(봇은 서버끼리 비교하지 않음)
 - [로컬] QEMU 포워딩은 게스트 포트가 닫혀도 호스트 쪽 연결을 받아 줌 → 포트 "열림"을 PG SSLRequest 응답으로 판정(`probe_addrs.sh`)
+
+### 11/22 투영 첫 측정 — stg-01(farm의 systemd-nspawn 컨테이너, sensor 투영 주소) vs app-01
+설계 변경: 단일 호스트 다중 주소 → **진짜 투영**(사용자 결정, `docs/plan-wbs.md` 3절). 위 다중 주소 결과는 그 근거로 남김
+| 단계 | stg-01 | 고칠 수 있나 |
+|---|---|---|
+| 스캔·SSH 배너·KEX·웹·PG 응답 | app-01과 같음. 컨테이너 로그에 **진짜 출발지**(NAT 없음) | — |
+| E1 SSH 인증 방법 | `publickey,password` ≠ app-01 `publickey` | ✅ debootstrap 기본 sshd → EC2 클라우드 이미지 기본(`PasswordAuthentication no`)으로 |
+| 패키지 패치 수준 | 처음엔 배너 `Ubuntu-3ubuntu13`(출시판) → 업데이트 후 `13.20` | ✅ 고침 |
+| S3 메모리 | 컨테이너는 팜의 메모리를 그대로 봄 | ⚠️ 팜 타입에 따라 다름 |
+| B7 가상화 | `systemd-detect-virt` = **systemd-nspawn** | ❌ 컨테이너인 이상 |
+| D4 audit 규칙 | **0개**(app-01 41) — 커널 audit은 컨테이너별로 안 나뉨 | ❌ 컨테이너 한계 |
+| D2·D3 패키지·서비스 | EC2 이미지 기본(apport·ModemManager·cloud-init·snapd·CloudWatch·SSM 등) 없음, 컨테이너 전용(console-getty) 있음 | ⚠️ 루트파일시스템을 debootstrap 대신 공식 클라우드 이미지 루트 tarball로 만들면 대부분 맞음(에이전트는 일부만 돎) |
+- A·C·F 항목 일부(backup 계정 등)는 db-backup-01 역할 규칙이라 stg-01엔 해당 없음 → 역할별 규칙으로 나눌 것

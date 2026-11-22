@@ -5,6 +5,9 @@
 #   infra/local-vm/vm.sh push    # 저장소 servers/ 를 VM ~/servers 로 복사
 #   infra/local-vm/vm.sh down    # VM 종료(디스크 유지)
 #   infra/local-vm/vm.sh reset   # VM 종료 + 디스크 삭제(깨끗한 이미지에서 다시)
+# VM_LAN: VM끼리 잇는 두 번째 NIC(L2) — 로컬에서 VPC internal 서브넷 대신(점대점 2대). UDP 데이터그램이 양방향으로 안정적
+#   VM_LAN_TYPE=dgram VM_LAN=local.type=inet,local.host=127.0.0.1,local.port=10001,remote.type=inet,remote.host=127.0.0.1,remote.port=10002 VM_LAN_MAC=...
+#   상대 VM은 포트를 맞바꿔서. (socket listen/connect는 11/22 로컬에서 한 방향만 흘렀음)
 # VM_EXTRA_FWD: 추가 포워딩(게스트 보조 IP로), 예) hostfwd=tcp:127.0.0.1:2241-10.0.2.16:22,hostfwd=...
 # KVM: 계정이 kvm 그룹에 없으면 TCG(소프트웨어 에뮬레이션)로 돌아 느리다.
 #   한 번만: sudo usermod -aG kvm "$USER"  후 Windows에서 wsl --shutdown
@@ -73,6 +76,7 @@ up() {
     -drive file="$DISK",if=virtio,format=qcow2 \
     -netdev user,id=n0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22,hostfwd=tcp:127.0.0.1:"$PG_PORT"-:5432${VM_EXTRA_FWD:+,$VM_EXTRA_FWD} \
     -device virtio-net-pci,netdev=n0 \
+    ${VM_LAN:+-netdev ${VM_LAN_TYPE:-socket},id=n1,$VM_LAN -device virtio-net-pci,netdev=n1,mac=${VM_LAN_MAC:?VM_LAN_MAC}} \
     -smbios type=1,serial="ds=nocloud;s=http://10.0.2.2:$SEED_PORT/" \
     -display none -serial file:"$DIR/$NAME-console.log" \
     -daemonize -pidfile "$DIR/$NAME.pid"

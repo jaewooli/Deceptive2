@@ -320,7 +320,8 @@ def git(out, *args, env=None):
                           capture_output=True, text=True).stdout
 
 
-def build(out):
+def build(out, until=None):
+    """until: 그 단계까지만(예: 옛 스테이징 stg-01 = 12, 2025-05-12). 마지막 트리 검사는 전체일 때만"""
     out = Path(out)
     if out.exists() and any(out.iterdir()):
         raise SystemExit(f"{out}: 비어 있지 않음")
@@ -328,6 +329,8 @@ def build(out):
     git(out, "init", "-q", "-b", "main")
     tree = {}
     for n, when, (name, email), msg, files in stages():
+        if until is not None and n > until:
+            break
         tree.update(files)
         for rel, content in files.items():
             p = out / rel
@@ -339,6 +342,13 @@ def build(out):
                    TZ="Asia/Seoul", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
         git(out, "add", "-A", env=env)
         git(out, "commit", "-q", "--no-verify", "-m", msg, env=env)
+    got = set(git(out, "ls-files").split())
+    if until is not None:
+        for rel in got:
+            ts = int(git(out, "log", "-1", "--format=%ct", "--", rel))
+            os.utime(out / rel, (ts, ts))
+        print(git(out, "log", "--format=%ad %an %s", "--date=format:%Y-%m-%d %H:%M"), end="")
+        return
     # 마지막 트리 = 현재 webapp
     want = {str(p.relative_to(SRC)) for p in SRC.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
     got = set(git(out, "ls-files").split())
@@ -359,8 +369,9 @@ def build(out):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
+    ap.add_argument("--until", type=int, help="이 단계까지만(옛 스테이징 stg-01 = 12)")
     args = ap.parse_args()
-    build(args.out)
+    build(args.out, args.until)
 
 
 if __name__ == "__main__":

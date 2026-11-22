@@ -56,6 +56,7 @@
 | B3 | 루트 파일시스템 생성 시각(`tune2fs -l`, `stat /`) | ⏱ | AMI 빌드일 ≤ 재구축일 |
 | B4 | SSH 호스트 키 mtime(`/etc/ssh/ssh_host_*`) | ⏱ | 옮겨 온 키라 옛 날짜(2024-06-12 첫 구축일), ctime은 재구축일 — 세 서버 공통 |
 | B5 | `/etc/machine-id`, `/etc/hostname` mtime | ⏱ | 재구축일 |
+| B7 | 가상화·컨테이너 종류(`systemd-detect-virt`, `/run/systemd/container`, PID 1 `container=`) — 11/22 추가(투영 팜 디코이) | = | app-01과 같음. 투영 팜 디코이(stg-01, systemd-nspawn)는 다름 — 측정 대상 |
 | B6 | 이미지 빌드 정보(`/etc/cloud/build.info` serial) | ⏱ | AMI 빌드일 ≤ 재구축일 |
 
 ## C. 연결 흔적 — 서버끼리 아는 사이인가 (T1018, T1049, T1016, [D] 02-infra 2절 "서로 아는 흔적이 맞물려야")
@@ -98,6 +99,6 @@
 | F6 | 계정 목록(`/etc/passwd`)·그룹이 역할과 맞음, 미끼 계정 `backup`이 정상 계정처럼 보임 | ↔ | `backup`(uid 34, 배포판 기본)에 셸·홈 사용 흔적. 다른 서버와 계정 구성 차이는 역할로 설명됨 |
 
 ## 범위
-- 총 43개 항목: 자동 층 7(S 4, E 3) / 사람 층 36(A 10, B 6, C 6, D 8, F 6) — S는 11/22 추가
-- 가상화 흔적(dmidecode, `sys_vendor`)은 세지 않음 — 세 서버가 모두 EC2라 진짜 서버도 같은 값(02-infra 2절 ①)
+- 총 44개 항목: 자동 층 7(S 4, E 3) / 사람 층 37(A 10, B 7, C 6, D 8, F 6) — S·B7은 11/22 추가
+- 가상화 흔적(dmidecode, `sys_vendor`)은 세지 않음 — 세 서버가 모두 EC2라 진짜 서버도 같은 값(02-infra 2절 ①). 단 **투영 팜 디코이는 컨테이너라 B7로 잰다(11/22)**
 - 다음: 11/23 스크립트(`validation/`, 서버에 설치하지 않고 SSH/SSM으로 실행) → 로컬 디코이 VM·로컬 app-01 VM 첫 실행

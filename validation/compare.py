@@ -247,6 +247,13 @@ def b6(h, r):
     return ("ok" if img <= rb else "clue"), f"이미지 빌드 {img} ≤ 재구축 {rb}"
 
 
+@rule("B7", "=", ("decoy",))
+def b7(h, r, app=None):
+    keys = ("virt", "container", "run_container", "pid1_env_container")
+    diff = [f"{k}={kv(h['B7'], k)}" for k in keys if kv(h["B7"], k) != kv(app["B7"], k)]
+    return ("clue", "app-01과 다름: " + ", ".join(diff)) if diff else ("ok", f"가상화 {kv(h['B7'], 'virt')}, 컨테이너 {kv(h['B7'], 'container')} — app-01과 같음")
+
+
 @rule("C1", "↔", ("decoy",))
 def c1(h, r, app=None):
     hostfps = {l.split()[1] for l in h["C1"] if l.startswith("hostkey ")}

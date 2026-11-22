@@ -212,10 +212,42 @@ def fix_header(text, d):
     return text
 
 
+def dump_at(day, out_path, keep_db):
+    """같은 시드의 데이터를 day 새벽 덤프 시점까지 만들고, 그 덤프 하나를 out_path에 쓴 뒤 DB를 keep_db로 남긴다.
+    옛 스테이징(stg-01)이 db-backup-01에서 가져와 복원한 덤프 — 데이터가 db-backup-01 덤프와 이어진다"""
+    psql("postgres", "DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='moayeyak') THEN CREATE ROLE moayeyak NOLOGIN; END IF; END$$;")
+    psql("postgres", f"DROP DATABASE IF EXISTS {DB_BUILD}; DROP DATABASE IF EXISTS {keep_db}; CREATE DATABASE {DB_BUILD} OWNER moayeyak;")
+    psql(DB_BUILD, SCHEMA)
+    world, d = World(), LAUNCH
+    while d < day:
+        stmts = world.day(d)
+        if stmts:
+            psql(DB_BUILD, "BEGIN;\n" + "\n".join(stmts) + "\nCOMMIT;")
+        d += timedelta(days=1)
+    raw = subprocess.run(["runuser", "-u", "postgres", "--", "pg_dump", "--no-privileges", DB_BUILD],
+                         check=True, capture_output=True, text=True).stdout
+    raw = fix_header(raw, day)
+    arrived = datetime.combine(day, time(3, 17, 41))
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=int(arrived.timestamp()) - 40) as g:
+        g.write(raw.encode())
+    with open(out_path, "wb") as f:
+        f.write(buf.getvalue())
+    psql("postgres", f"ALTER DATABASE {DB_BUILD} RENAME TO {keep_db};")
+    print(f"dump {out_path} reservations={psql(keep_db, 'select count(*) from reservations;').strip()}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--app-ip", required=True, help="app-01 사설 IP(authorized_keys from=)")
+    ap.add_argument("--app-ip", help="app-01 사설 IP(authorized_keys from=)")
+    ap.add_argument("--dump-at", help="YYYY-MM-DD: 그날 덤프 하나만 만들고 DB를 남김(옛 스테이징용)")
+    ap.add_argument("--dump-out")
+    ap.add_argument("--keep-db", default="moayeyak")
     args = ap.parse_args()
+    if args.dump_at:
+        return dump_at(date.fromisoformat(args.dump_at), args.dump_out, args.keep_db)
+    if not args.app_ip:
+        ap.error("--app-ip 필요")
 
     # ---- 계정·디렉터리
     sh("usermod", "-d", "/backup", "-s", "/bin/bash", "backup")

@@ -105,6 +105,14 @@ sec B6
 cat /etc/cloud/build.info 2>/dev/null || echo "build.info 없음"
 ts /etc/cloud/build.info /var/log/installer 2>/dev/null
 
+sec B7
+# 가상화·컨테이너 종류(T1497.001). EC2끼리는 같아서 세지 않았지만, 투영 팜 디코이는 컨테이너라 달라진다(11/22)
+echo "virt=$(systemd-detect-virt 2>/dev/null || echo none)"
+echo "container=$(systemd-detect-virt -c 2>/dev/null || echo none)"
+echo "run_container=$(cat /run/systemd/container 2>/dev/null || echo none)"
+echo "pid1_env_container=$(tr '\0' '\n' < /proc/1/environ 2>/dev/null | sed -n 's/^container=//p' | head -1)"
+echo "dmi_vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo none)"
+
 # ---------------- C. 연결 흔적
 sec C1
 for h in $(homes); do
