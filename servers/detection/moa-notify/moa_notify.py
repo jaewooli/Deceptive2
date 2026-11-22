@@ -150,6 +150,8 @@ class PgConnections:
 
         if (r := RE_RECEIVED.match(msg)):
             s["client"] = r["host"] + (f":{r['port']}" if r["port"] else "")
+            if r["host"] == "127.0.0.1" and r["port"] and int(r["port"]) in GATE_MAP:
+                s["client"] = GATE_MAP.pop(int(r["port"])) + " (관문 경유)"
             return []
         if (r := RE_AUTHORIZED.match(msg)):
             s["user"], s["database"] = r["user"], r["db"] or s["database"]
@@ -323,6 +325,106 @@ class ForwardedPorts:
                  "result": f"{p} 실제 프로그램이 사용 시작 → 넘기기 중단", "log_ts": ts, "lines": []} for p in sorted(busy)]
 
 
+# ---------------------------------------------------------------- 페이로드 관문(핸드셰이크만 한 연결은 넘기지 않음)
+GATE_MAP = {}  # 관문이 백엔드로 연 연결의 로컬 포트 → 진짜 출발지(PG 로그의 127.0.0.1:포트를 바꿔 쓰려고)
+
+
+class PayloadGate:
+    """바깥에서 이 포트로 온 연결을 투명하게(TPROXY) 받아, 첫 바이트가 오기 전까지는 서비스에 넘기지 않는다.
+    페이로드 없이 끝난 연결은 알리지 않고, 첫 바이트가 오면 그 순간 알리고 서비스에 이어 준다.
+    (클라이언트가 먼저 말하는 프로토콜에만 — PG는 시작 패킷을 클라이언트가 먼저 보낸다)"""
+
+    name = "gate"
+
+    def __init__(self, cfg, host):
+        import threading, queue
+        self.host = host
+        self.port = int(cfg["port"])
+        self.listen = int(cfg.get("listen_port", 15432))
+        self.backend = (cfg.get("backend_host", "127.0.0.1"), int(cfg.get("backend_port", self.port)))
+        self.mark = int(cfg.get("mark", 1))
+        self.rt = int(cfg.get("table_id", 100))
+        self.q = queue.Queue()
+        self.quiet = 0
+        self.setup()
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def setup(self):
+        import subprocess
+        ip = lambda *a: subprocess.run(["/usr/sbin/ip", *a], capture_output=True, text=True)
+        if not re.search(rf"fwmark 0x{self.mark:x} lookup {self.rt}", ip("rule", "show").stdout):
+            ip("rule", "add", "fwmark", str(self.mark), "lookup", str(self.rt))
+        ip("route", "replace", "local", "0.0.0.0/0", "dev", "lo", "table", str(self.rt))
+        text = (f"table ip local_gate\ndelete table ip local_gate\ntable ip local_gate {{\n  chain pre {{\n"
+                f"    type filter hook prerouting priority mangle; policy accept;\n"
+                f"    iifname != \"lo\" tcp dport {self.port} tproxy to 127.0.0.1:{self.listen} meta mark set {self.mark} accept\n  }}\n}}\n")
+        r = subprocess.run(["/usr/sbin/nft", "-f", "-"], input=text, text=True, capture_output=True)
+        if r.returncode:
+            log.error("nft gate: %s", r.stderr.strip())
+
+    def serve(self):
+        import threading
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.setsockopt(socket.SOL_IP, 19, 1)  # IP_TRANSPARENT
+        srv.bind(("127.0.0.1", self.listen))
+        srv.listen(128)
+        log.info("관문: %d (바깥 연결 → 페이로드가 와야 %s:%d)", self.port, *self.backend)
+        while True:
+            c, peer = srv.accept()
+            threading.Thread(target=self.handle, args=(c, peer), daemon=True).start()
+
+    def handle(self, c, peer):
+        import threading
+        try:
+            first = c.recv(65536)  # 시간 제한 없음 — 핸드셰이크만 한 연결은 상대가 닫을 때까지 여기서 대기
+        except OSError:
+            first = b""
+        if not first:
+            self.quiet += 1  # 페이로드 없이 끝남(미끼 연결) — 알리지 않음
+            c.close()
+            return
+        ts = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        self.q.put({"host": self.host, "source": "관문", "client": f"{peer[0]}:{peer[1]}", "user": None, "database": None,
+                    "result": f"{self.port} 첫 페이로드 {len(first)}B → 서비스로 넘김", "log_ts": ts, "lines": []})
+        try:
+            b = socket.create_connection(self.backend, timeout=5)
+        except OSError as e:
+            log.warning("관문 백엔드: %s", e)
+            c.close()
+            return
+        GATE_MAP[b.getsockname()[1]] = f"{peer[0]}:{peer[1]}"
+        b.sendall(first)
+
+        def pump(a, z):
+            try:
+                while True:
+                    d = a.recv(65536)
+                    if not d:
+                        break
+                    z.sendall(d)
+            except OSError:
+                pass
+            finally:
+                for x in (a, z):
+                    try:
+                        x.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+
+        threading.Thread(target=pump, args=(b, c), daemon=True).start()
+        pump(c, b)
+
+    def feed(self, line):
+        return []
+
+    def tick(self):
+        out = []
+        while not self.q.empty():
+            out.append(self.q.get())
+        return out
+
+
 # ---------------------------------------------------------------- 알림 보내기
 class Notifier:
     def __init__(self, cfg):
@@ -379,7 +481,7 @@ def format_text(ev):
 
 
 # ---------------------------------------------------------------- 실행
-WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts}
+WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate}
 
 
 def load_state(path):
@@ -407,7 +509,7 @@ def run(cfg, once=False):
     for name, wcfg in cfg.get("watch", {}).items():
         if not wcfg.get("enabled", True):
             continue
-        watches.append((Follower(wcfg["path"], state, name), WATCHERS[name](wcfg, host)))
+        watches.append((Follower(wcfg["path"], state, name) if wcfg.get("path") else None, WATCHERS[name](wcfg, host)))
     if not watches:
         log.info("켜진 감시 항목 없음")
     log.info("시작: %s", ", ".join(w.name for _, w in watches) or "-")
@@ -416,7 +518,7 @@ def run(cfg, once=False):
     while True:
         for follower, watcher in watches:
             events = []
-            for line in follower.lines():
+            for line in (follower.lines() if follower else []):
                 events += watcher.feed(line)
             events += watcher.tick()
             for ev in events:

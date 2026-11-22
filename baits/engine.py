@@ -363,6 +363,20 @@ def cmd_rotate(a):
     save_reg(r)
 
 
+def cmd_refresh(a):
+    """미끼 정의(템플릿)를 고친 뒤: 같은 ID로 내용만 다시 만들어 적용(안 하면 verify가 서버의 새 내용을 드리프트로 보고 되돌린다)"""
+    r = load_reg()
+    targets = [pid for pid, p in r["placements"].items() if p["status"] == "active" and p["type"] != "decoy_port"
+               and (a.all or pid in a.ids)]
+    for pid in targets:
+        p = r["placements"][pid]
+        p["ops"] = T.TYPES[p["type"]].ops(p["anchor"], p["ident"], dests()[T.DECOY])
+        run_ops([(pid, p)], "apply")
+        event(r, "refreshed", pid)
+        print(f"갱신 {pid} {p['type']} {p['host']}")
+    save_reg(r)
+
+
 def cmd_recall(a):
     r = load_reg()
     targets = [pid for pid, p in r["placements"].items() if p["status"] in ("active", "failed", "pending")
@@ -390,7 +404,7 @@ def main():
     sp.add_parser("collect").set_defaults(f=lambda a: collect())
     for n, f in (("plan", cmd_plan), ("apply", cmd_apply), ("verify", cmd_verify), ("list", cmd_list)):
         sp.add_parser(n).set_defaults(f=f)
-    for n, f in (("rotate", cmd_rotate), ("recall", cmd_recall)):
+    for n, f in (("rotate", cmd_rotate), ("recall", cmd_recall), ("refresh", cmd_refresh)):
         p = sp.add_parser(n)
         p.add_argument("ids", nargs="*")
         p.add_argument("--all", action="store_true")

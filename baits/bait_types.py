@@ -210,17 +210,27 @@ class AgentSession:
 class SyncService:
     name = "sync_service"
     POOL = ["sync_svc", "report_sync", "rpt_sync"]
+    # 꺼진 상태에서도 사본 DB 쪽 연결을 하나 잡아 둔다(핸드셰이크만, 데이터 없음) → 침투한 공격자의 netstat·ss·ip neigh에
+    # 디코이가 보인다(Attivo US10375110 "연결 테이블 미끼"). 무작위 간격으로 끊고 다시 맺는다. 디코이 쪽 관문은 페이로드 없는 연결을 알리지 않는다
     SCRIPT = """#!/usr/bin/env python3
-# {feature} 사본 동기화 (2024-07). {flag}=false 이면 대기만 한다.
-import os, time, logging
+# {feature} 사본 동기화 (2024-07). {flag}=false 이면 동기화는 쉬고 연결만 유지한다.
+import logging, os, random, socket, time
+from urllib.parse import urlsplit
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 log = logging.getLogger("{name}")
+u = urlsplit(os.environ.get("SYNC_DB_URL", ""))
 while True:
-    if os.environ.get("{flag}", "false").lower() != "true":
-        time.sleep(3600)
+    if os.environ.get("{flag}", "false").lower() == "true":
+        log.info("sync start")
+        time.sleep(int(os.environ.get("SYNC_INTERVAL", "86400")))
         continue
-    log.info("sync start")
-    time.sleep(int(os.environ.get("SYNC_INTERVAL", "86400")))
+    try:
+        s = socket.create_connection((u.hostname, u.port or 5432), timeout=10)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        time.sleep(random.randint(1800, 7200))
+        s.close()
+    except OSError:
+        time.sleep(300)
 """
 
     def match(self, ctx, host):
