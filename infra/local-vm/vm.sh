@@ -5,7 +5,8 @@
 #   infra/local-vm/vm.sh push    # 저장소 servers/ 를 VM ~/servers 로 복사
 #   infra/local-vm/vm.sh down    # VM 종료(디스크 유지)
 #   infra/local-vm/vm.sh reset   # VM 종료 + 디스크 삭제(깨끗한 이미지에서 다시)
-# VM_LAN: VM끼리 잇는 두 번째 NIC(L2) — 로컬에서 VPC internal 서브넷 대신(점대점 2대). UDP 데이터그램이 양방향으로 안정적
+# VM_LAN: VM끼리 잇는 두 번째 NIC(L2). 여러 대가 한 망 = 멀티캐스트(권장, 11/22): VM_LAN_TYPE=socket VM_LAN=mcast=239.192.20.1:10100,localaddr=127.0.0.1
+#   점대점 2대만이면 UDP 데이터그램도 됨(아래)
 #   VM_LAN_TYPE=dgram VM_LAN=local.type=inet,local.host=127.0.0.1,local.port=10001,remote.type=inet,remote.host=127.0.0.1,remote.port=10002 VM_LAN_MAC=...
 #   상대 VM은 포트를 맞바꿔서. (socket listen/connect는 11/22 로컬에서 한 방향만 흘렀음)
 # VM_EXTRA_FWD: 추가 포워딩(게스트 보조 IP로), 예) hostfwd=tcp:127.0.0.1:2241-10.0.2.16:22,hostfwd=...

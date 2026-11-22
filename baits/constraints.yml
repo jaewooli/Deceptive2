@@ -1,0 +1,4 @@
+# 서사 결정이 막는 자리 — 규칙이 맥락으로 찾아도 두지 않는다(이유와 결정일)
+deny:
+  - anchor: "ssh_config:app-01:postgres"
+    reason: "옛 rsync 개인키는 S3 전환 때 지웠다(11/22 사용자 결정). 남기면 T1~T6 밖의 새 미끼"

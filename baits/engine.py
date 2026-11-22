@@ -94,7 +94,13 @@ def anchor_key(tname, host, a):
 
 
 # ------------------------------------------------------------------ 계획
+def constraints():
+    p = HERE / "constraints.yml"
+    return {d["anchor"]: d["reason"] for d in (yaml.safe_load(p.read_text()) or {}).get("deny", [])} if p.exists() else {}
+
+
 def plan(r, ctxs):
+    deny = constraints()
     active = {p["anchor_key"]: pid for pid, p in r["placements"].items() if p["status"] == "active"}
     used = {p["ident"]["value"] for p in r["placements"].values()}
     new, seen = [], set()
@@ -104,6 +110,9 @@ def plan(r, ctxs):
                 key = anchor_key(tname, host, a)
                 seen.add(key)
                 if key in active:
+                    continue
+                if key in deny:
+                    print(f"막힘    {tname:12} {host:12} {key} — {deny[key]}")
                     continue
                 # 히스토리는 같은 사용자에게 SSH 미끼가 있을 때만(길잡이)
                 if tname == "history" and not any(k.startswith(f"ssh_config:{host}:{a['user']}") for k in list(active) + [n["anchor_key"] for n in new]):
@@ -122,8 +131,9 @@ def dests():
 def build(r, item, rotated_from=None):
     t = T.TYPES[item["type"]]
     used = {p["ident"]["value"] for p in r["placements"].values()}
-    ident = t.new_ident(item["anchor"], used)
-    ops = t.ops(item["anchor"], ident, dests()[T.DECOY])
+    dest = dests()[T.DECOY]
+    ident = t.new_ident(item["anchor"], used, dest) if "dest" in t.new_ident.__code__.co_varnames else t.new_ident(item["anchor"], used)
+    ops = t.ops(item["anchor"], ident, dest)
     pid = secrets.token_hex(4)
     r["placements"][pid] = {"type": item["type"], "host": item["host"], "anchor": item["anchor"], "anchor_key": item["anchor_key"],
                             "ident": ident, "ops": ops, "status": "active", "created": now(), "rotated_from": rotated_from}

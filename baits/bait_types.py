@@ -27,7 +27,7 @@ def pw(n=20):
 
 
 def shell_users(ctx):
-    return [u for u in ctx["users"] if u["uid"] >= 1000 or u["name"] == "root"]
+    return list(ctx["users"])  # 수집기가 셸 있는 계정만 준다(서비스 계정 포함)
 
 
 # ------------------------------------------------------------------ T1형: 설정 파일의 꺼진 기능 DB URL
@@ -73,6 +73,17 @@ class EnvDbUrl:
 
 
 # ------------------------------------------------------------------ T2형: ~/.ssh/config + 키 / T3형: 히스토리
+def hashed_known_host(names, pubkey):
+    """ssh-keygen -H 형식(|1|salt|hmac) — Ubuntu 기본 HashKnownHosts yes와 같은 모양"""
+    import base64, hashlib, hmac, os as _os
+    out = []
+    for n in names:
+        salt = _os.urandom(20)
+        mac = hmac.new(salt, n.encode(), hashlib.sha1).digest()
+        out.append(f"|1|{base64.b64encode(salt).decode()}|{base64.b64encode(mac).decode()} {pubkey}")
+    return out
+
+
 def keygen(comment):
     with tempfile.TemporaryDirectory() as t:
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", f"{t}/k"], check=True)
@@ -99,12 +110,14 @@ class SshConfig:
                 out.append({"user": u["name"], "home": u["home"], "uid": u["uid"], "gid": u["gid"], "keyname": keyname,
                             "indent": (u["ssh_config"] or {}).get("indent", "    "),
                             "config_mtime": (u["ssh_config"] or {}).get("mtime"), "ssh_dir_mtime": u["ssh_dir_mtime"],
+                            "known_hosts_mtime": u.get("known_hosts_mtime"),
                             "host": host})
         return out
 
-    def new_ident(self, a, used):
+    def new_ident(self, a, used, dest=None):
         priv, pub, fp = keygen(f"{a['user']}@{a['host']}")
-        return {"kind": "ssh_key", "value": fp, "private": priv, "public": pub}
+        kh = hashed_known_host([DECOY, dest["ip"]], dest["host_key"]) if dest and dest.get("host_key") else []
+        return {"kind": "ssh_key", "value": fp, "private": priv, "public": pub, "known_hosts": kh}
 
     def ops(self, a, ident, dest):
         h, i = a["home"], a["indent"]
@@ -119,6 +132,11 @@ class SshConfig:
             {"kind": "block", "path": f"{h}/.ssh/config", "block": block, "mode": "0600", **own, "mtime": ts(a["config_mtime"]) or made},
             # 목적지 쪽: 디코이 backup 계정이 이 키를 받아 준다(로그인 = 경보, 세션 기록)
             {"kind": "decoy_key", "decoy": DECOY, "user": "backup", "line": f"{ident['public']}"},
+        ] + [
+            # 써 본 서버라면 known_hosts에 있다 — 없으면 첫 접속 때 "처음 보는 호스트" 질문이 떠서 단서(11/22 실측)
+            {"kind": "line", "path": f"{h}/.ssh/known_hosts", "regexp": "^" + __import__("re").escape(l) + "$", "line": l,
+             "absent_line": None, "mode": "0600", **own, "mtime": ts(a.get("known_hosts_mtime")) or made}
+            for l in ident["known_hosts"]
         ]
 
 
@@ -135,7 +153,7 @@ class History:
 
     def ops(self, a, ident, dest):
         # 끝에 붙이면 "최근에 썼다"가 되어 서사(2025-09 이후 방치)와 어긋난다 → 앞쪽 60% 지점에 섞는다
-        return [{"kind": "insert", "path": a["path"], "lines": self.LINES, "ratio": 0.6, "mtime": ts(a["mtime"])}]
+        return [{"kind": "insert", "path": a["path"], "lines": self.LINES + ["exit"], "ratio": 0.6, "boundary": "exit", "mtime": ts(a["mtime"])}]
 
 
 # ------------------------------------------------------------------ T6형: 남은 AWS 장기 키
@@ -148,7 +166,9 @@ class AwsProfile:
             return []
         return [{"user": u["name"], "home": u["home"], "gid": u["gid"], "cred_mtime": u["aws"]["cred_mtime"]}
                 for u in shell_users(ctx)
-                if (u["aws"]["dir"] or u["cron_uses_aws"]) and self.PROFILE not in u["aws"]["profiles"]]
+                # aws를 실제로 쓰는 계정: 그 계정의 cron(또는 cron이 부르는 스크립트)이 aws를 부른다.
+                # ~/.aws만 있는 것은 근거가 약하다(로컬 VM root의 CloudWatch 에이전트 자격증명 — 11/22 오판)
+                if u["cron_uses_aws"] and self.PROFILE not in u["aws"]["profiles"]]
 
     def new_ident(self, a, used):
         # 로컬: 형식만 맞춘 값. AWS(11/28): IAM 사용자 backup-legacy의 실제 액세스 키(권한 없음)로 교체

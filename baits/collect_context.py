@@ -71,13 +71,29 @@ def ssh_config_shape(path):
             "indent": (re.search(r"^(\s+)\S", txt, re.M) or [None, "    "])[1], "mtime": mtime(path)}
 
 
+def cron_uses(cron, word):
+    """주석이 아닌 cron 줄 또는 그 줄이 부르는 스크립트 안에 word가 있는가(스크립트 이름만 보면 놓친다 — 11/22)"""
+    pat = re.compile(rf"\b{re.escape(word)}\b")
+    for line in cron.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if pat.search(line):
+            return True
+        for tok in re.findall(r"(/[\w./-]+)", line):
+            try:
+                if os.path.isfile(tok) and os.path.getsize(tok) < 65536 and pat.search(open(tok, errors="replace").read()):
+                    return True
+            except OSError:
+                pass
+    return False
+
+
 def users():
     out = []
     for p in pwd.getpwall():
         if p.pw_shell.endswith(("nologin", "false", "sync")) or not os.path.isdir(p.pw_dir):
             continue
-        if p.pw_uid != 0 and p.pw_uid < 1000:
-            continue
+        # uid로 거르지 않는다: postgres처럼 셸이 있는 서비스 계정도 사람이 쓰고 cron이 돈다(11/22 놓침)
         h = p.pw_dir
         hist = os.path.join(h, ".bash_history")
         used = {}
@@ -96,16 +112,18 @@ def users():
             if os.path.exists(fp):
                 aws_profiles += re.findall(r"^\[(?:profile )?([^\]]+)\]", open(fp, errors="replace").read(), re.M)
         cron = run("crontab", "-l", "-u", p.pw_name)
+        cron_aws = cron_uses(cron, "aws")
         out.append({
             "name": p.pw_name, "uid": p.pw_uid, "gid": p.pw_gid, "home": h, "shell": p.pw_shell,
             "home_mtime": mtime(h),
             "ssh_dir": os.path.isdir(os.path.join(h, ".ssh")), "ssh_dir_mtime": mtime(os.path.join(h, ".ssh")),
             "ssh_config": ssh_config_shape(os.path.join(h, ".ssh", "config")),
             "known_hosts": os.path.exists(os.path.join(h, ".ssh", "known_hosts")),
+            "known_hosts_mtime": mtime(os.path.join(h, ".ssh", "known_hosts")),
             "keys": sorted(os.path.basename(k) for k in glob.glob(os.path.join(h, ".ssh", "id_*")) if not k.endswith(".pub")),
             "history": {"path": hist, "lines": nhist, "mtime": mtime(hist), "top": sorted(used, key=used.get, reverse=True)[:15]} if nhist else None,
             "aws": {"dir": os.path.isdir(aws_dir), "profiles": aws_profiles, "cred_mtime": mtime(os.path.join(aws_dir, "credentials"))},
-            "cron_uses_aws": bool(re.search(r"^[^#].*\baws\b", cron, re.M)),
+            "cron_uses_aws": cron_aws,
             "agent_running": bool(run("pgrep", "-u", p.pw_name, "-x", "ssh-agent").strip()),
         })
     return out

@@ -107,7 +107,11 @@ def do(op, mode):
         if mode == "absent":
             if cur and blk in cur:
                 sep = "\n" + blk
-                write(p, cur.replace(sep, "", 1) if sep in cur else cur.replace(blk, "", 1), op)
+                rest = cur.replace(sep, "", 1) if sep in cur else cur.replace(blk, "", 1)
+                if rest.strip():
+                    write(p, rest, op)
+                else:
+                    os.remove(p)  # 미끼가 만든 파일이었다 — 빈 파일을 남기면 그것도 흔적(11/22)
             return "absent"
         if cur is not None and blk in cur:
             return "ok"
@@ -121,21 +125,25 @@ def do(op, mode):
             write(p, text, op)
         return "changed"
     if k == "insert":
+        # 미끼 줄은 연속된 한 덩어리로만 찾고 넣고 뺀다. 줄 단위로 지우면 원래 히스토리의 같은 줄(exit 등)까지 지운다(11/22 실측)
         lines = (cur or "").splitlines(keepends=True)
         want = [l + "\n" for l in op["lines"]]
-        present = all(w in lines for w in want)
+        n = len(want)
+        pos = next((i for i in range(len(lines) - n + 1) if lines[i:i + n] == want), None)
         if mode == "absent":
-            if present:
-                for w in want:
-                    lines.remove(w)
+            if pos is not None:
+                del lines[pos:pos + n]
                 write(p, "".join(lines), op)
             return "absent"
-        if present:
+        if pos is not None:
             return "ok"
         if mode == "check":
             return "drift"
-        lines = [l for l in lines if l not in want]
         at = int(len(lines) * op.get("ratio", 0.6))
+        b = op.get("boundary")
+        if b:  # 세션 중간에 끼지 않게: 그 지점 뒤의 첫 경계 줄(exit) 다음에
+            nxt = [i + 1 for i in range(at, len(lines)) if lines[i].strip() == b]
+            at = nxt[0] if nxt else len(lines)
         lines[at:at] = want
         write(p, "".join(lines), op)
         return "changed"

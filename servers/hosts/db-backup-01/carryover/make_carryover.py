@@ -149,8 +149,10 @@ class World:
         # 010-0xxx는 이동전화에 배정되지 않는 대역 → 실존 번호와 겹치지 않음
         return f"010-0{self.rng.randint(100, 999)}-{self.rng.randint(1000, 9999)}"
 
-    def day(self, d):
+    def day(self, d, with_updated=False, cutoff=None):
+        """cutoff: 이 시각 뒤의 일은 아직 안 일어난 것(운영 DB의 오늘 하루에만 씀 — 그 뒤 날이 없으니 난수 순서가 달라져도 무관)"""
         out = []
+        late = (lambda t: cutoff is not None and t > cutoff)
         for i, (name, cat, addr, tel, user) in enumerate(STORES):
             if STORE_OPEN[i] == d:
                 t = datetime.combine(d, time(10 + i % 5, self.rng.randint(0, 59), self.rng.randint(0, 59)))
@@ -183,13 +185,27 @@ class World:
                 status = "cancelled" if self.rng.random() < 0.07 else "confirmed"
                 name = self.rng.choice(SURN) + self.rng.choice(GIVEN)
                 party = self.rng.choice([1, 1, 1, 2, 2, 2, 3, 4]) if self.rng.random() < 0.9 else self.rng.randint(5, 12)
+                cols, vals = "", ""
+                if with_updated:
+                    cols, vals = ", updated_at", f", {q(created)}"
+                if late(created):
+                    continue
                 resv.append((created, "INSERT INTO reservations (code, store_id, customer_name, customer_phone, party_size, reserved_at, "
-                           f"memo, status, created_at) VALUES ({q(code)}, {sid}, {q(name)}, {q(self.phone())}, {party}, "
-                           f"{q(reserved)}, {q(self.rng.choice(MEMOS))}, {q(status)}, {q(created)});"))
+                           f"memo, status, created_at{cols}) VALUES ({q(code)}, {sid}, {q(name)}, {q(self.phone())}, {party}, "
+                           f"{q(reserved)}, {q(self.rng.choice(MEMOS))}, {q(status)}, {q(created)}{vals});"))
             if self.rng.random() < 0.6:  # 사장님 로그인
                 t = datetime.combine(d, time(self.rng.randint(9, 22), self.rng.randint(0, 59), self.rng.randint(0, 59)))
-                out.append(f"UPDATE admin_users SET last_login_at = {q(t)} WHERE username = {q(user)};")
+                if not late(t):
+                    out.append(f"UPDATE admin_users SET last_login_at = {q(t)} WHERE username = {q(user)};")
         out.extend(sql for _, sql in sorted(resv, key=lambda x: x[0]))
+        if with_updated:  # 2025-10-21 예약 변경 기능 뒤: 하루 몇 건은 손님이 예약을 고친다(앞으로 올 예약만)
+            for _ in range(self.rng.randint(0, 6)):
+                t = datetime.combine(d, time(self.rng.randint(9, 22), self.rng.randint(0, 59), self.rng.randint(0, 59)))
+                if late(t):
+                    continue
+                out.append("UPDATE reservations SET party_size = GREATEST(1, party_size + " + str(self.rng.choice([-1, 1, 1, 2])) +
+                           f"), updated_at = {q(t)} WHERE id = (SELECT id FROM reservations WHERE status = 'confirmed' AND reserved_at > {q(t)} "
+                           f"AND created_at < {q(t)} ORDER BY md5(id::text || {q(str(d))}) LIMIT 1);")
         return out
 
 
@@ -237,13 +253,41 @@ def dump_at(day, out_path, keep_db):
     print(f"dump {out_path} reservations={psql(keep_db, 'select count(*) from reservations;').strip()}")
 
 
+MIGRATION = datetime(2025, 10, 21, 14, 41, 7)  # 예약 변경 기능 배포(커밋 2025-10-21 14:30) 때 손으로 돌린 ALTER
+
+
+def live(until, password, db="moayeyak"):
+    """app-01 운영 DB: 같은 시드로 운영 시작부터 until까지. 2025-10-21에 updated_at 컬럼 추가(그때 있던 행은 마이그레이션 시각)."""
+    psql("postgres", f"DO $$BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='moayeyak') THEN CREATE ROLE moayeyak LOGIN; END IF; END$$;"
+                     f" ALTER ROLE moayeyak LOGIN PASSWORD {q(password)};")
+    psql("postgres", f"DROP DATABASE IF EXISTS {DB_BUILD}; CREATE DATABASE {DB_BUILD} OWNER moayeyak;")
+    psql(DB_BUILD, SCHEMA)
+    world, d, migrated = World(), LAUNCH, False
+    while d <= until:
+        if not migrated and d >= MIGRATION.date():
+            psql(DB_BUILD, f"ALTER TABLE reservations ADD COLUMN updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT {q(MIGRATION)};"
+                           " ALTER TABLE reservations ALTER COLUMN updated_at DROP DEFAULT;")
+            migrated = True
+        stmts = world.day(d, with_updated=migrated, cutoff=datetime.now() if d == date.today() else None)
+        if stmts:
+            psql(DB_BUILD, "BEGIN;\n" + "\n".join(stmts) + "\nCOMMIT;")
+        d += timedelta(days=1)
+    psql("postgres", f"DROP DATABASE IF EXISTS {db}; ALTER DATABASE {DB_BUILD} RENAME TO {db};")
+    print(f"live {db} reservations={psql(db, 'select count(*) from reservations;').strip()} "
+          f"edited={psql(db, 'select count(*) from reservations where updated_at > created_at;').strip()}")
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--live", help="YYYY-MM-DD까지 운영 DB(app-01)")
+    ap.add_argument("--password", help="--live: moayeyak 역할 비밀번호(web-01 .env와 같게, 배포 때 주입)")
     ap.add_argument("--app-ip", help="app-01 사설 IP(authorized_keys from=)")
     ap.add_argument("--dump-at", help="YYYY-MM-DD: 그날 덤프 하나만 만들고 DB를 남김(옛 스테이징용)")
     ap.add_argument("--dump-out")
     ap.add_argument("--keep-db", default="moayeyak")
     args = ap.parse_args()
+    if args.live:
+        return live(date.fromisoformat(args.live), args.password or ap.error("--password 필요"))
     if args.dump_at:
         return dump_at(date.fromisoformat(args.dump_at), args.dump_out, args.keep_db)
     if not args.app_ip:
