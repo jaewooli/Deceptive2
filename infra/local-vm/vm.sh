@@ -5,6 +5,7 @@
 #   infra/local-vm/vm.sh push    # 저장소 servers/ 를 VM ~/servers 로 복사
 #   infra/local-vm/vm.sh down    # VM 종료(디스크 유지)
 #   infra/local-vm/vm.sh reset   # VM 종료 + 디스크 삭제(깨끗한 이미지에서 다시)
+# VM_EXTRA_FWD: 추가 포워딩(게스트 보조 IP로), 예) hostfwd=tcp:127.0.0.1:2241-10.0.2.16:22,hostfwd=...
 # KVM: 계정이 kvm 그룹에 없으면 TCG(소프트웨어 에뮬레이션)로 돌아 느리다.
 #   한 번만: sudo usermod -aG kvm "$USER"  후 Windows에서 wsl --shutdown
 set -euo pipefail
@@ -70,7 +71,7 @@ up() {
   # shellcheck disable=SC2046
   qemu-system-x86_64 $(accel) -m "$MEM" -smp "$CPUS" -machine q35 \
     -drive file="$DISK",if=virtio,format=qcow2 \
-    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22,hostfwd=tcp:127.0.0.1:"$PG_PORT"-:5432 \
+    -netdev user,id=n0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22,hostfwd=tcp:127.0.0.1:"$PG_PORT"-:5432${VM_EXTRA_FWD:+,$VM_EXTRA_FWD} \
     -device virtio-net-pci,netdev=n0 \
     -smbios type=1,serial="ds=nocloud;s=http://10.0.2.2:$SEED_PORT/" \
     -display none -serial file:"$DIR/$NAME-console.log" \

@@ -71,9 +71,9 @@
 ## D. 감시 흔적 차이 — 디코이에만 감시 장치가 있는가 (T1518.001, T1057, T1007, [D] 변경 A)
 | ID | 검사 | 판정 | 디코이 기대 상태 |
 |---|---|---|---|
-| D1 | `ps -eo comm,args` 보안·감시 프로세스 | = | app-01과 같음(auditd, SSM, CloudWatch, freshclam, moa-notify) |
+| D1 | `ps -eo comm` + 데몬 명령줄(PID 1의 자식, 11/22) 보안·감시 프로세스 | = | app-01과 같음(auditd, SSM, CloudWatch, freshclam, moa-notify) |
 | D2 | `dpkg -l` 패키지 목록 diff(역할 패키지 제외) | = | 같음 |
-| D3 | `systemctl list-unit-files --state=enabled` diff | = | 같음(역할 서비스 제외) |
+| D3 | `systemctl list-unit-files --state=enabled` + 실행 중인 서비스(템플릿 인스턴스, 11/22) diff | = | 같음(역할 서비스 제외) |
 | D4 | `auditctl -l` 규칙 수·내용 + `servers/base/audit/check.sh` | = | 같음(41줄) |
 | D5 | 감시 설정 해시: `/etc/audit/rules.d`, CloudWatch `agent.json`, moa-notify 설정 | = | 같음. moa-notify 설정이 다르면(감시 항목) 그 차이를 기록 |
 | D6 | `ss -ltnp` 열린 포트 | = | 역할 포트(22, 5432) 외에 같음 |
@@ -85,7 +85,7 @@
 |---|---|---|---|
 | E1 | SSH 배너·버전·KEX/암호 목록(`ssh -vv`, `nmap --script ssh2-enum-algos`) | = | app-01과 같음 |
 | E2 | PG 버전·인증 실패 메시지 형식(원격 접속) | = | app-01과 같음 |
-| E3 | 보조 IP별 sshd 응답(11/24 다중 주소 이후) — **IP별 호스트 키 지문이 다른가** 포함(11/22) | = | 기본 sshd와 배너 외 같음. 호스트 키가 IP마다 같으면 스캐너가 "IP 여러 개 = 기계 1대"로 묶음(로그인 없이 보이는 값 → 자동 층). 다른 점은 기능 1 넓이 학습 로그로 |
+| E3 | 보조 IP별 sshd 응답(11/24 다중 주소 이후) — **IP별 호스트 키 지문이 다른가** 포함(11/22) | = | 기본 sshd와 배너 외 같음. 호스트 키가 IP마다 같으면 스캐너가 "IP 여러 개 = 기계 1대"로 묶음(로그인 없이 보이는 값 → 자동 층). 다른 점은 기능 1 넓이 학습 로그로 / 11/22 실측: `probe_addrs.sh` |
 
 ## F. 이야기 일관성 — 서사와 맞는가 (T1082, T1083, T1087, [D] 02-infra 4절)
 | ID | 검사 | 판정 | 디코이 기대 상태 |

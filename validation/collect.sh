@@ -150,11 +150,18 @@ ls -l --time-style=+%F /etc/cron.d/backup-dumps 2>/dev/null
 sec D1
 ps -eo comm= | sort -u | grep -vE '^(kworker|ksoftirqd|migration|rcu_|cpuhp|idle_inject|irq/|scsi_|jbd2|kthreadd|kdevtmpfs|khugepaged|kcompactd|oom_reaper|watchdog|writeback|kblockd|kswapd|ext4|xfs|card|ata_|kauditd|khungtaskd|kintegrityd|ksmd|mm_percpu|netns|pool_|psimon|charger|devfreq|edac|inet_frag|kstrp|tpm|zswap|blkcg|cryptd|hwrng|ipv6|kaluad|kmpath|md$|mld|rcu|slub|kthrotld|acpi|vfio|ttm|nvme|virtio|hv_)'
 
+# 이름만 보면 같은 sshd가 여러 개 떠도 모른다(11/22 실측) → 데몬(PID 1의 자식) 명령줄도 본다
+echo "-- daemons"
+ps -o args= --ppid 1 | sed -E 's/[0-9]+ of [0-9-]+ startups//; s/ +$//' | sort -u
+
 sec D2
 dpkg-query -W -f='${Package}\n' | sort
 
 sec D3
 systemctl list-unit-files --state=enabled --no-legend --no-pager | awk '{print $1}' | sort
+# 템플릿 인스턴스(ssh-addr@<ip>)는 위 목록에 안 나온다 → 실행 중인 서비스도
+echo "-- running"
+systemctl list-units --type=service --state=running --no-legend --plain --no-pager | awk '{print $1}' | sort
 
 sec D4
 echo "rules=$(auditctl -l 2>/dev/null | wc -l)"

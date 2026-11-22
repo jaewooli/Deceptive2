@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """구별 단서 판정 (checks.md 43개, 자동 층·사람 층). collect.sh·probe.sh·botprobe.sh 원자료를 받아 항목별로 판정한다.
-  python3 -I validation/compare.py <디코이.txt> <app.txt> [--probe <디코이.probe> <app.probe>] [--bot <디코이.bot> <app.bot>] > report.md
+  python3 -I validation/compare.py <디코이.txt> <app.txt> [--probe <디코이.probe> <app.probe>] [--bot <디코이.bot> <app.bot>] [--addrs <디코이.addrs>] > report.md
 
 판정
   ok     기대 상태와 맞음
@@ -340,7 +340,10 @@ def d1(h, r, app=None):
     h2 = type("H", (), {"__getitem__": lambda self, k: [l for l in h[k] if l.strip() not in ONDEMAND]})()
     a2 = type("H", (), {"__getitem__": lambda self, k: [l for l in app[k] if l.strip() not in ONDEMAND]})()
     res = _d1(h2, r, a2)
-    return res + ((f"요청형 데몬 차이(일시적, 세지 않음): {', '.join(od)}",) if od else ())
+    notes = [f"요청형 데몬 차이(일시적, 세지 않음): {', '.join(od)}"] if od else []
+    if "ssh/addr/" in res[1]:
+        notes.append("보조 IP별 sshd — 넓이의 대가, 로그인 뒤에만 보임(감시 장치 아님)")
+    return res + ((" ".join(notes),) if notes else ())
 
 
 RULES["D1"] = ("=", ("decoy",), d1)
@@ -374,7 +377,33 @@ def e_rule(i):
 
 RULES["E1"] = ("=", ("decoy",), e_rule("E1"))
 RULES["E2"] = ("=", ("decoy",), e_rule("E2"))
-RULES["E3"] = ("=", ("decoy",), lambda h, r: ("skip", "11/24 단일 호스트 다중 주소 이후"))
+def e3(h, r, app=None):
+    rows = []
+    for l in h["E3"]:
+        if l.startswith("addr "):
+            head, _, keys = l.partition(" keys=")
+            f = dict(x.split("=", 1) for x in re.findall(r"(\w+=\S+(?: Ubuntu-\S+)?)", head))
+            f["keys"] = set(keys.split())
+            rows.append(f)
+    if not rows:
+        return "skip", "probe_addrs.sh 결과 없음"
+    seen, shared = {}, []
+    for f in rows:
+        for k in f["keys"]:
+            if k in seen:
+                shared.append(f"{seen[k]}={f['name']}")
+            seen[k] = f["name"]
+    want_ssh = kv(h["probe_E1"], "") or rows[0]["ssh"]
+    odd = [f["name"] for f in rows if f["ssh"] != rows[0]["ssh"] or f["kex"] != rows[0]["kex"]]
+    layout = ", ".join(f"{f['name']} 22{'+5432' if f['pg'] == 'open' else ''}" for f in rows)
+    if shared:
+        return "clue", f"같은 호스트 키를 내는 주소: {shared} → 스캔에서 한 대로 묶임"
+    if odd:
+        return "clue", f"배너·KEX가 다른 주소: {odd}(같은 바이너리인데 다르면 꾸민 티)"
+    return "ok", f"주소 {len(rows)}개 = 호스트 키 {len(rows)}벌, 배너·KEX는 주변 서버와 같음 / {layout}"
+
+
+RULES["E3"] = ("=", ("decoy",), e3)
 
 
 @rule("F1", "↔", ("decoy",))
@@ -442,11 +471,15 @@ def s2(h, r):
 
 @rule("S3", "=", ("decoy",))
 def s3(h, r, app=None):
-    keys = ("nproc", "cpu", "arch", "uname", "gpu", "mem_mib", "busybox")
+    # 봇은 한 서버의 값만 본다 — 하드웨어가 같은 타입인지만 비교하고, 커널(재부팅 시점에 따라 다름)은 표시만
+    keys = ("nproc", "cpu", "arch", "gpu", "mem_mib", "busybox")
     diff = [k for k in keys if kv(h["S3"], k) != kv(app["S3"], k)]
     note = ""
+    ku, ka = kv(h["S3"], "uname").split()[1:2], kv(app["S3"], "uname").split()[1:2]
+    if ku != ka:
+        note = f"커널 {ku[0] if ku else '?'} vs app-01 {ka[0] if ka else '?'} — 패치 뒤 재부팅 시점 차이(세지 않음) "
     if kv(h["S3"], "gpu") != "0" or "Core(TM)" in kv(h["S3"], "cpu"):
-        note = f"[로컬] CPU `{kv(h['S3'], 'cpu')}`·GPU {kv(h['S3'], 'gpu')}개는 QEMU·내 PC 값(EC2 t3.small은 Xeon·GPU 없음, 세 서버 같음)"
+        note += f"[로컬] CPU `{kv(h['S3'], 'cpu')}`·GPU {kv(h['S3'], 'gpu')}개는 QEMU·내 PC 값(EC2 t3.small은 Xeon·GPU 없음, 세 서버 같음)"
     if diff:
         return "clue", "app-01과 다름: " + ", ".join(f"{k}={kv(h['S3'], k)}" for k in diff), note
     return "ok", f"app-01과 같음(코어 {kv(h['S3'], 'nproc')}, {kv(h['S3'], 'mem_mib')} MiB)", note
@@ -489,6 +522,11 @@ def run(h, role, app):
 def main():
     args = sys.argv[1:]
     opt = {"--probe": [None, None], "--bot": [None, None]}
+    addrs = None
+    if "--addrs" in args:
+        k = args.index("--addrs")
+        addrs = args[k + 1]
+        del args[k:k + 2]
     for flag in opt:
         if flag in args:
             k = args.index(flag)
@@ -496,6 +534,8 @@ def main():
             del args[k:k + 3]
     d = Host(args[0], opt["--probe"][0], opt["--bot"][0])
     a = Host(args[1], opt["--probe"][1], opt["--bot"][1])
+    if addrs:
+        d.s.update(load(addrs))
     rd, ra = run(d, "decoy", a), run(a, "app", d)
 
     order = sorted(RULES, key=lambda i: (tier(i) != "자동", "SEABCDF".index(i[0]), int(i[1:])))
