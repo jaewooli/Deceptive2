@@ -1,0 +1,13 @@
+#!/bin/sh
+# guest@<이름> 시작 뒤: 투영 주소 경로 → 탭. 실패해도 VM을 내리지 않는다(11/22: 시작 스크립트 실패 → 디코이가 같이 내려감)
+n=$1; . /etc/guest/$n.env; x=${ADDR%/*}; t=ve-$n
+for i in $(seq 50); do ip link show "$t" >/dev/null 2>&1 && break; sleep 0.2; done
+sysctl -q -w net.ipv4.conf.$t.rp_filter=2 2>/dev/null
+ip route replace $x/32 dev $t
+# 응답 → relay 터널(경로표 120은 relay PostUp이 채움). 터널이 없으면 unreachable로 버린다 — 비어 있으면 main으로 떨어져
+# 같은 LAN으로 바로 나가 터널을 우회한다(11/23 SSH 키 교환 멈춤의 원인)
+ip route replace unreachable default metric 4000 table 120
+ip rule show iif $t | grep -q "lookup 120" || ip rule add pref 50 iif $t lookup 120
+# VM 경로가 빠지면 LAN으로 새지 않고 버린다(farm과 센서가 같은 망이면 루프 — 11/22)
+ip route replace blackhole $x/32 metric 1000 2>/dev/null
+exit 0

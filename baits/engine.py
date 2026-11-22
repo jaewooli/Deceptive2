@@ -7,16 +7,21 @@
   python3 baits/engine.py rotate [ID|--all] 고유 ID 교체. 옛 ID는 retired로 남겨 계속 감시
   python3 baits/engine.py recall [ID|--host H|--all]  깨끗하게 회수
   python3 baits/engine.py list
+투영 디코이(projection): plan이 blend.py로 구간·이름·주소를 정하고, apply가 센서 투영 + 팜 KVM VM을 만든다(destinations.yml의 sensor.nics 필요)
 레지스트리: out/baits/registry.json(로컬, 커밋 안 함 — 미끼 실제 값이 들어 있음). AWS에선 비공개 S3(11/28)
 목적지: out/baits/destinations.yml  {db-backup-01: {ip: ...}}
 경보: 환경변수 BAIT_WEBHOOK_URL(없으면 표준 출력)
 """
 import argparse
+import base64
+import io
+import ipaddress
 import json
 import os
 import secrets
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.request
 from pathlib import Path
@@ -25,6 +30,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 import bait_types as T  # noqa: E402
+import blend  # noqa: E402
 
 HERE = Path(__file__).parent
 OUT = HERE.parent / "out" / "baits"
@@ -126,7 +132,123 @@ def plan(r, ctxs):
                 new.append({"type": tname, "host": host, "anchor": a, "anchor_key": key})
                 used.add("_")
     gone = [pid for key, pid in active.items() if key not in seen and r["placements"][pid]["host"] in ctxs]
+    new += plan_projection(r, ctxs)
     return new, gone
+
+
+# ------------------------------------------------------------------ 투영 디코이(Acalvio 투영 + 규칙 블렌딩, HANDOFF 8절)
+def projection_conf():
+    return yaml.safe_load((HERE / "projection.yml").read_text())
+
+
+def plan_projection(r, ctxs):
+    """주변 회사 서버 맥락 → 역할 템플릿마다 구간·이름·주소(blend.py). 이미 있는 역할은 건너뜀"""
+    d = dests()
+    if "sensor" not in d:
+        return []
+    company = inventory().get("company", [])
+    cx = {h: c for h, c in ctxs.items() if h in company}
+    act = [p for p in r["placements"].values() if p["type"] == "projection" and p["status"] in ("active", "pending")]
+    taken = [v["ip"] for v in d.values() if isinstance(v, dict) and "ip" in v] + [p["anchor"]["addr"].split("/")[0] for p in act]
+    names = [p["anchor"]["name"] for p in act] + [k for k in d if isinstance(d[k], dict)]
+    lan = ipaddress.ip_network(d.get("lan_cidr", "10.0.0.0/16"))
+    out = []
+    for a in blend.plan(cx, projection_conf(), lan, taken, names, [p["anchor"]["template"] for p in act]):
+        if not (SRV / "hosts/farm/roles" / a["template"] / "role.sh").exists():
+            print(f"건너뜀  projection   {a['name']} — 역할 스크립트 없음(servers/hosts/farm/roles/{a['template']}/role.sh)")
+            continue
+        if not d["sensor"]["nics"].get(a["segment"]):
+            print(f"건너뜀  projection   {a['name']} — 센서에 {a['segment']} NIC 없음")
+            continue
+        out.append({"type": "projection", "host": d["farm"]["host"], "anchor": a, "anchor_key": f"projection:{d['farm']['host']}:{a['template']}"})
+    return out
+
+
+def _tgz(files):
+    """{묶음 안 경로: 로컬 경로 | bytes} → base64 tgz"""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        for arc, src in files.items():
+            if isinstance(src, bytes):
+                ti = tarfile.TarInfo(arc); ti.size = len(src); ti.mode = 0o644
+                t.addfile(ti, io.BytesIO(src))
+            else:
+                t.add(src, arc, filter=lambda x: None if "__pycache__" in x.name or x.name.endswith("README.md") else x)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def role_extras(a):
+    """역할마다 배포 묶음에 더 넣을 것과 role.sh 인자"""
+    import tempfile
+    d = dests()
+    if a["template"] == "stg":   # 2025-05-12(12단계)까지의 앱 이력, 공통 PG 설정, 옮겨 온 데이터 생성기, db-backup-01 호스트 키
+        tmp = Path(tempfile.mkdtemp())
+        subprocess.run([sys.executable, str(SRV / "webapp-history/build_history.py"), "--out", str(tmp / "app"), "--until", "12"],
+                       check=True, capture_output=True)
+        dbb = d[T.DECOY]
+        return ({"role/app": str(tmp / "app"), "role/base/postgresql": str(SRV / "base/postgresql"),
+                 "role/carryover/make_carryover.py": str(SRV / "hosts/db-backup-01/carryover/make_carryover.py"),
+                 "role/dbb_hostkey.pub": (dbb["host_key"] + "\n").encode()},
+                [".", dbb["ip"], "dbb_hostkey.pub"])
+    if a["template"] == "dev":   # 앱 이력(12단계), 공통 PG 설정, 데이터 생성기, known_hosts용 호스트 키(stg 디코이·web-01·db-backup-01)
+        tmp = Path(tempfile.mkdtemp())
+        subprocess.run([sys.executable, str(SRV / "webapp-history/build_history.py"), "--out", str(tmp / "app"), "--until", "12"],
+                       check=True, capture_output=True)
+        dbb = d[T.DECOY]
+        stg = next((p["anchor"] for p in load_reg()["placements"].values()
+                    if p["type"] == "projection" and p["status"] == "active" and p["anchor"]["template"] == "stg"), None)
+        if not stg:
+            raise SystemExit("dev 역할은 stg 디코이를 가리킨다(git remote·known_hosts) — stg를 먼저 배치")
+        _, sk = one(d["farm"]["host"], [{"kind": "bundle", "tgz": _tgz({"guest": str(SRV / "hosts/farm/guest")}), "entry": "guest/guest.sh",
+                                         "argv": ["hostkey", stg["name"]], "collect": ["hostkey"]}])
+        _, wk = one("web-01", [{"kind": "run", "argv": [], "collect": ["hostkey"],
+                                "script": "echo hostkey=$(awk '{print $2}' /etc/ssh/ssh_host_ed25519_key.pub)\n"}])
+        web_ip = next(ipaddress.ip_interface(i["addr"]).ip for i in contexts()["web-01"]["net"]["ifaces"]
+                      if ipaddress.ip_interface(i["addr"]).ip in ipaddress.ip_network(d.get("lan_cidr", "10.0.0.0/16")))
+        return ({"role/app": str(tmp / "app"), "role/base/postgresql": str(SRV / "base/postgresql"),
+                 "role/carryover/make_carryover.py": str(SRV / "hosts/db-backup-01/carryover/make_carryover.py"),
+                 "role/stg.pub": f"ssh-ed25519 {sk['hostkey']}\n".encode(), "role/web.pub": f"ssh-ed25519 {wk['hostkey']}\n".encode(),
+                 "role/dbb.pub": (dbb["host_key"] + "\n").encode()},
+                [".", stg["name"], stg["addr"].split("/")[0], "stg.pub", str(web_ip), "web.pub", dbb["ip"], "dbb.pub"])
+    return {}, []
+
+
+def place_projection(r, pid):
+    """센서에 투영 주소(구간 NIC 하나) → 그 NIC MAC으로 팜 VM 생성(첫 부팅: 패치·패키지·공통 베이스) → 역할 → 시작"""
+    p = r["placements"][pid]
+    a, d = p["anchor"], dests()
+    sensor, farm = d["sensor"], d["farm"]
+    busy = {q.get("nic") for q in r["placements"].values() if q["type"] == "projection" and q["status"] == "active"}
+    nic = next((n for n in sensor["nics"][a["segment"]] if n not in busy), None)
+    if not nic:
+        raise SystemExit(f"센서 {a['segment']}에 빈 NIC 없음(디코이 하나 = NIC 하나 — 같은 MAC에 여러 서버가 묶이면 ARP 캐시에서 드러남)")
+    _, sd = one(sensor["host"], [{"kind": "run", "script": (SRV / "hosts/sensor/install.sh").read_text(),
+                                  "argv": ["add", nic, a["addr"], a["gw"]], "collect": ["projection_mac"]}])
+    p["nic"], p["mac"] = nic, sd["projection_mac"]
+    save_reg(r)
+    extras, rargs = role_extras(a)
+    key = Path(yaml.safe_load((OUT / "inventory.yml").read_text())["all"]["vars"]["ansible_ssh_private_key_file"] + ".pub")
+    n = a["name"]
+    run = (f"set -euo pipefail\ncd \"$(dirname \"$0\")\"\n"
+           f"APT_SNAPSHOT={a.get('platform', {}).get('apt_snapshot') or ''} bash guest/guest.sh create {n} {a['addr']} {a['gw']} {p['mac']} {a['mem']} 2 {','.join(a['packages'])} mgmt.pub {'pg' if a['pg'] else ''}\n"
+           f"bash guest/guest.sh offline {n}\n(cd role && GUEST_NAME={n} bash ./role.sh {' '.join(rargs)})\n"
+           f"bash guest/guest.sh seal {n}\nbash guest/guest.sh online {n}\n")
+    files = {"guest": str(SRV / "hosts/farm/guest"), "guest/base": str(SRV / "base"),
+             "role": str(SRV / "hosts/farm/roles" / a["template"]), "mgmt.pub": key.read_bytes(), "run.sh": run.encode(), **extras}
+    one(farm["host"], [{"kind": "bundle", "tgz": _tgz(files), "entry": "run.sh", "argv": []}])
+    p["ops"] = [{"kind": "unit", "name": f"guest@{n}.service", "on_host": farm["host"]}]
+
+
+def recall_projection(r, pid):
+    p = r["placements"][pid]
+    a, d = p["anchor"], dests()
+    n, x = a["name"], a["addr"].split("/")[0]
+    one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"""systemctl disable --now guest@{n} 2>/dev/null
+rm -f /var/lib/guests/{n}.qcow2 /var/lib/guests/{n}-user-data.last /etc/guest/{n}.env /etc/guest/{n}.pub /etc/systemd/network/10-ve-{n}.network /var/log/guests/{n}.log
+while ip rule del iif ve-{n} lookup 120 2>/dev/null; do :; done
+ip route del {x}/32 2>/dev/null; ip route del blackhole {x}/32 metric 1000 2>/dev/null; networkctl reload 2>/dev/null; true
+"""}])
+    one(d["sensor"]["host"], [{"kind": "run", "script": (SRV / "hosts/sensor/install.sh").read_text(), "argv": ["remove", x]}])
 
 
 def dests():
@@ -294,6 +416,9 @@ def cmd_apply(a):
             if p["type"] == "decoy_port":
                 place_decoy_port(r, pid)
                 states = {pid: [(p["host"], 0, "changed")]}
+            elif p["type"] == "projection":
+                place_projection(r, pid)
+                states = {pid: [(p["host"], 0, "changed")]}
             else:
                 states = run_ops([(pid, p)], "apply")
         except SystemExit as e:
@@ -366,7 +491,7 @@ def cmd_rotate(a):
 def cmd_refresh(a):
     """미끼 정의(템플릿)를 고친 뒤: 같은 ID로 내용만 다시 만들어 적용(안 하면 verify가 서버의 새 내용을 드리프트로 보고 되돌린다)"""
     r = load_reg()
-    targets = [pid for pid, p in r["placements"].items() if p["status"] == "active" and p["type"] != "decoy_port"
+    targets = [pid for pid, p in r["placements"].items() if p["status"] == "active" and p["type"] not in ("decoy_port", "projection")
                and (a.all or pid in a.ids)]
     for pid in targets:
         p = r["placements"][pid]
@@ -384,7 +509,10 @@ def cmd_recall(a):
     for pid in [t for t in targets if r["placements"][t]["type"] == "decoy_port"]:
         recall_decoy_port(r, pid)
         r["placements"][pid]["status"] = "recalled"
-    run_ops([(pid, r["placements"][pid]) for pid in targets if r["placements"][pid]["type"] != "decoy_port"], "absent")
+    for pid in [t for t in targets if r["placements"][t]["type"] == "projection"]:
+        recall_projection(r, pid)
+        r["placements"][pid]["status"] = "recalled"
+    run_ops([(pid, r["placements"][pid]) for pid in targets if r["placements"][pid]["type"] not in ("decoy_port", "projection")], "absent")
     for pid in targets:
         r["placements"][pid]["status"] = "recalled"
         event(r, "recalled", pid)

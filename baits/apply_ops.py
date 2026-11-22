@@ -256,6 +256,28 @@ def do(op, mode):
             DATA["error"] = (r.stderr or r.stdout)[-800:]
             return "failed"
         return "absent" if mode == "absent" else "changed"
+    if k == "bundle":
+        # 디렉터리 묶음(tgz, base64)을 /root 아래 임시 경로에 풀고 entry를 실행한 뒤 지운다 — 투영 디코이처럼 스크립트 하나로 안 되는 작업
+        import base64, io, shutil, subprocess, tarfile, tempfile
+        if mode == "check":
+            return "ok"
+        if mode == "absent" and not op.get("on_absent"):
+            return "absent"
+        d = tempfile.mkdtemp(prefix=".b", dir="/root")
+        try:
+            with tarfile.open(fileobj=io.BytesIO(base64.b64decode(op["tgz"])), mode="r:gz") as t:
+                t.extractall(d, filter="data")
+            argv = op["on_absent"] if mode == "absent" else op["argv"]
+            r = subprocess.run(["/bin/bash", os.path.join(d, op["entry"]), *argv], capture_output=True, text=True, cwd=d)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+        for line in r.stdout.splitlines():
+            if "=" in line and line.split("=", 1)[0] in op.get("collect", []):
+                DATA[line.split("=", 1)[0]] = line.split("=", 1)[1].split()[0]
+        if r.returncode:
+            DATA["error"] = (r.stderr or r.stdout)[-800:]
+            return "failed"
+        return "absent" if mode == "absent" else "changed"
     if k == "ports_config":
         # 세 서버 공통 데몬 설정에서 ports 감시만 바꾼다(다른 감시·웹훅은 그대로) → 다시 시작
         import subprocess

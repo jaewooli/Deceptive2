@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# farm — 투영 팜(벤더 투영의 중앙 팜 쪽). 디코이는 systemd-nspawn OS 컨테이너, 센서와는 WireGuard로만 잇는다.
+# farm — 투영 팜(벤더 투영의 중앙 팜 쪽). 디코이는 KVM VM(guest/guest.sh, 11/23 결정 B), 센서와는 WireGuard로만 잇는다.
 # root로, 여러 번 실행해도 결과가 같다.
-#   sudo ./install.sh <센서 공개키> <컨테이너 이름> <투영 주소/접두> <투영 서브넷 게이트웨이>
-#   예) 로컬: ./install.sh <키> stg-01 10.0.20.30/24 10.0.20.1    EC2: ./install.sh <키> stg-01 10.0.2.40/24 10.0.2.1
-# 컨테이너 안에서 보이는 것: 자기 NIC에 투영 주소, 기본 게이트웨이 = 그 서브넷의 .1(팜 쪽 veth가 맡음, proxy ARP)
-# 컨테이너 루트파일시스템은 <이름>/build.sh가 만든다(/var/lib/machines/<이름>)
+#   sudo ./install.sh <센서 공개키>
+# 이 스크립트는 센서와의 터널(relay)과 응답 경로표(120)만. 디코이(KVM VM)·디코이별 응답 규칙·탭 주소는 guest/guest.sh
+# 디코이 안에서 보이는 것: 자기 NIC에 투영 주소, 기본 게이트웨이 = 그 서브넷의 .1(팜 쪽 탭이 맡음, proxy ARP)
 # 키: 처음 실행 때 /etc/wireguard/relay.key를 만들고 공개키를 출력한다(저장소에 넣지 않음)
 set -euo pipefail
-SENSOR_PUB=${1:?센서 공개키}; NAME=${2:?컨테이너 이름}; ADDR=${3:?투영 주소/접두}; GW=${4:?게이트웨이}
-X=${ADDR%/*}; VETH="ve-$NAME"; T_OUT=120
+SENSOR_PUB=${1:?센서 공개키}; T_OUT=120
 export DEBIAN_FRONTEND=noninteractive
-dpkg -s wireguard-tools systemd-container debootstrap >/dev/null 2>&1 || apt-get install -y -q wireguard-tools systemd-container debootstrap
+dpkg -s wireguard-tools systemd-container >/dev/null 2>&1 || apt-get install -y -q wireguard-tools systemd-container
 
 install -d -m 0700 /etc/wireguard
 [ -f /etc/wireguard/relay.key ] || (umask 077; wg genkey > /etc/wireguard/relay.key)
 cat > /etc/sysctl.d/60-relay.conf <<'EOF'
 net.ipv4.ip_forward = 1
 net.ipv4.conf.all.rp_filter = 2
+# 다른 NIC에 붙은 자기 주소로는 ARP에 답하지 않는다 — 탭·veth 쪽 주소로 LAN의 ARP를 가로채지 않게(11/23 구간 분리: 라우터 .1 충돌)
+net.ipv4.conf.all.arp_ignore = 1
 EOF
 sysctl -q -p /etc/sysctl.d/60-relay.conf
 
@@ -29,10 +29,10 @@ Table = off
 # MTU = 구간(LAN·VPC) MTU 그대로(로컬 1500, AWS 9001). 바깥 UDP는 IP 단편화에 맡긴다(WireGuard는 바깥 패킷에 DF를 안 건다).
 # 11/23 실측: 1380 + MSS 조정이면 공격자 SYN-ACK에 MSS 1340(이웃은 1460)·DF 1472 ping 소실·tracepath 무응답 → 디코이가 터널 뒤임이 드러남
 MTU = ${SEGMENT_MTU:-$(cat /sys/class/net/"$(ip -o route get 1.1.1.1 | sed -n 's/.* dev \([^ ]*\).*/\1/p')"/mtu)}
-# 컨테이너 응답 경로는 터널 수명 주기에 묶는다 — 컨테이너 시작 스크립트에 두면 터널보다 먼저 돌아 경로표가 비고,
-# 응답이 같은 LAN으로 바로 나가 터널을 우회한다(11/23 SSH 키 교환 멈춤)
+# 디코이 응답 경로는 터널 수명 주기에 묶는다 — 디코이 시작 스크립트에 두면 터널보다 먼저 돌아 경로표가 비고,
+# 응답이 같은 LAN으로 바로 나가 터널을 우회한다(11/23 SSH 키 교환 멈춤). 디코이별 규칙(iif ve-<이름> → $T_OUT)은 guest-up이 걸고,
+# 터널이 없을 때를 위해 $T_OUT에 unreachable 예비 경로를 둔다(새지 않고 버림 — fail-closed)
 PostUp = ip route replace default dev %i table $T_OUT
-PostUp = ip rule show pref 50 | grep -q . || ip rule add pref 50 iif $VETH lookup $T_OUT
 
 # 포워딩 홉마다 TTL이 1 준다 → 투영 디코이가 같은 서브넷인데 TTL 62로 보임(11/23 실측). 들어올 때 1을 되돌린다(양방향: 응답 TTL 64, traceroute에 홉 없음)
 PostUp = iptables -w -t mangle -C PREROUTING -i %i -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i %i -j TTL --ttl-inc 1
@@ -47,54 +47,15 @@ chmod 600 /etc/wireguard/relay.conf
 systemctl enable wg-quick@relay >/dev/null 2>&1
 systemctl restart wg-quick@relay
 
-# 컨테이너가 뜰 때 팜 쪽 veth: 게이트웨이 주소 + proxy ARP, 투영 주소 경로, 응답은 터널로
-install -d /usr/local/lib/relay /etc/systemd/system/systemd-nspawn@"$NAME".service.d
-# veth 주소·proxy ARP는 networkd 설정으로 고정(스크립트로 넣으면 기본 80-container-ve.network가 지운다 — 11/22 경쟁)
-cat > /etc/systemd/network/10-$VETH.network <<EOF
-[Match]
-Name=$VETH
-
-[Network]
-Address=$GW/32
-IPv4ProxyARP=yes
-LinkLocalAddressing=no
-IPv6AcceptRA=no
-ConfigureWithoutCarrier=yes
-EOF
 # networkd는 기본값으로 자기가 만들지 않은 정책 규칙·경로를 지운다(wg-quick PostUp 규칙이 사라짐 — 11/22 재부팅 시험)
 install -d /etc/systemd/networkd.conf.d
 printf '[Network]\nManageForeignRoutingPolicyRules=no\nManageForeignRoutes=no\n' > /etc/systemd/networkd.conf.d/10-keep-foreign.conf
-systemctl enable --now systemd-networkd >/dev/null 2>&1 || true
-# 세션 안에서 바로 재시작하면 관리 접속(SSH)이 끊겨 멈춘다(11/22) → 분리해서
-systemd-run --on-active=1 --unit=networkd-reload-$$ systemctl restart systemd-networkd >/dev/null 2>&1 || true
-sleep 4
-networkctl reload 2>/dev/null || true
-cat > /usr/local/lib/relay/veth-up <<EOF
-#!/bin/sh
-# systemd-nspawn@$NAME 시작 뒤: 투영 주소 경로, 응답은 터널로. 실패해도 컨테이너를 내리지 않는다(11/22: veth보다 먼저 돌아 실패 → 컨테이너가 같이 내려감)
-for i in \$(seq 50); do ip link show $VETH >/dev/null 2>&1 && break; sleep 0.2; done
-sysctl -q -w net.ipv4.conf.$VETH.rp_filter=2 2>/dev/null
-ip route replace $X/32 dev $VETH
-# 컨테이너 경로가 빠지면 LAN으로 새지 않고 버린다(farm과 센서가 같은 망이면 루프 — 11/22)
-ip route replace blackhole $X/32 metric 1000 2>/dev/null
-# 응답 경로(table $T_OUT)·규칙은 wg-quick@relay PostUp이 건다
-exit 0
-EOF
-chmod 755 /usr/local/lib/relay/veth-up
-cat > /etc/systemd/system/systemd-nspawn@"$NAME".service.d/relay.conf <<EOF
-[Unit]
-After=wg-quick@relay.service systemd-networkd.service
-Wants=wg-quick@relay.service
-[Service]
-ExecStartPost=/usr/local/lib/relay/veth-up
-EOF
-install -d /etc/systemd/nspawn
-cat > /etc/systemd/nspawn/"$NAME".nspawn <<EOF
-[Exec]
-Boot=yes
-PrivateUsers=no
-[Network]
-VirtualEthernet=yes
-EOF
+# 11/23까지의 컨테이너 디코이 흔적 정리(디코이는 이제 guest/guest.sh의 KVM VM)
+for n in $(ls /etc/systemd/nspawn 2>/dev/null | sed -n 's/\.nspawn$//p' | grep -v '^trap-'); do
+  systemctl disable --now "systemd-nspawn@$n" >/dev/null 2>&1 || true
+  rm -rf "/etc/systemd/nspawn/$n.nspawn" "/etc/systemd/system/systemd-nspawn@$n.service.d"
+  findmnt -rno SOURCE "/var/lib/machines/$n" >/dev/null || rm -rf "/var/lib/machines/$n"   # 옛 루트파일시스템(같은 자리가 VM 디스크 마운트 지점)
+done
+rm -f /usr/local/lib/relay/veth-up
 systemctl daemon-reload
 echo "relay_public_key=$(wg pubkey < /etc/wireguard/relay.key)"

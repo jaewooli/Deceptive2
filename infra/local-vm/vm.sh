@@ -9,6 +9,8 @@
 #   점대점 2대만이면 UDP 데이터그램도 됨(아래)
 #   VM_LAN_TYPE=dgram VM_LAN=local.type=inet,local.host=127.0.0.1,local.port=10001,remote.type=inet,remote.host=127.0.0.1,remote.port=10002 VM_LAN_MAC=...
 #   상대 VM은 포트를 맞바꿔서. (socket listen/connect는 11/22 로컬에서 한 방향만 흘렀음)
+# VM_LAN_EXTRA: LAN NIC를 더(공백으로 구분, 각 "<socket 인자>@<MAC>"). PCI 슬롯 8부터(게스트 enp0s8, enp0s9 …) — 라우터·센서(구간마다 NIC)
+#   예) VM_LAN_EXTRA="mcast=239.192.21.1:10101,localaddr=127.0.0.1@52:54:00:21:00:01"
 # VM_EXTRA_FWD: 추가 포워딩(게스트 보조 IP로), 예) hostfwd=tcp:127.0.0.1:2241-10.0.2.16:22,hostfwd=...
 # virtio-balloon free page reporting: 게스트의 빈 메모리를 호스트에 돌려준다(11/22: 게스트는 400~540MB를 쓰는데
 #   QEMU가 페이지 캐시까지 붙잡아 870~1,226MB → 호스트 7.9GB에 3~4대만 떠서 VM을 계속 껐다 켬)
@@ -62,6 +64,14 @@ EOF
   : > "$SEED/vendor-data"
 }
 
+extra_lans() {
+  local i=8 e
+  for e in ${VM_LAN_EXTRA:-}; do
+    printf -- '-netdev socket,id=x%d,%s -device virtio-net-pci,netdev=x%d,mac=%s,addr=0x%x ' "$i" "${e%@*}" "$i" "${e#*@}" "$i"
+    i=$((i + 1))
+  done
+}
+
 accel() {
   if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then echo "-accel kvm -cpu host"; else echo "-accel tcg -cpu max"; fi
 }
@@ -80,6 +90,7 @@ up() {
     -netdev user,id=n0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22,hostfwd=tcp:127.0.0.1:"$PG_PORT"-:5432${VM_EXTRA_FWD:+,$VM_EXTRA_FWD} \
     -device virtio-net-pci,netdev=n0 \
     ${VM_LAN:+-netdev ${VM_LAN_TYPE:-socket},id=n1,$VM_LAN -device virtio-net-pci,netdev=n1,mac=${VM_LAN_MAC:?VM_LAN_MAC}} \
+    $(extra_lans) \
     -smbios type=1,serial="ds=nocloud;s=http://10.0.2.2:$SEED_PORT/" \
     -device virtio-balloon-pci,free-page-reporting=on \
     -display none -serial file:"$DIR/$NAME-console.log" \

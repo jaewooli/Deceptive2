@@ -1,0 +1,21 @@
+# 디코이 안쪽 — 공격자가 들어간 뒤 보는 것. 기대 = 로컬 진짜 서버(app-01)의 모습(11/22 B7·D4 컨테이너 단서가 VM으로 사라졌는지)
+# 실행(호스트에서, web-01을 점프 호스트로 — 관리 키는 호스트에만):
+#   K=~/.cache/deceptive2-vm/id_ed25519; python3 infra/checks/paths.py infra/checks/inside.local.txt \
+#     --transport "ssh -i $K -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -J ubuntu@127.0.0.1:2235 -o ProxyCommand=none ubuntu@{host} 'sudo sh -s'"
+#   (주의: 디코이 auth.log에 web-01 출발 ubuntu 로그인이 남는다 — 측정 흔적)
+10.0.21.12 | has | systemd-detect-virt | ^kvm$ | stg-01: 가상화 = kvm(진짜 서버와 같음, 컨테이너면 systemd-nspawn)
+10.0.21.12 | has | auditctl -s | ^enabled 1 | stg-01: auditd 동작(컨테이너에선 불가했음)
+10.0.21.12 | has | auditctl -l | auid>=1000 | stg-01: 공통 감사 규칙(로그인 세션 명령)
+10.0.21.12 | has | ip -o link show enp0s3 | link/ether 52:54:00:21:00:30 | stg-01: NIC MAC = 이웃 ARP 값(센서 투영 NIC)
+10.0.21.12 | hasnt | lsblk -dno NAME | ^sr1$ | stg-01: CD-ROM 하나(seed ISO 흔적 없음)
+10.0.21.12 | has | cloud-id | ^nocloud$ | stg-01: cloud-id = 로컬 진짜 VM과 같음
+10.0.21.12 | hasnt | cat /var/lib/cloud/instance/user-data.txt | runcmd|base\.tgz|power_state | stg-01: user-data에 빌드 내용 없음
+10.0.21.12 | hasnt | ls /etc/apt/apt.conf.d | 50-build-snapshot | stg-01: 빌드용 스냅숏 설정 없음
+10.0.21.12 | has | hostname | ^stg-01$ | stg-01: hostname
+10.0.21.12 | has | uname -r | ^6\.8\.0-149-generic$ | stg-01: 실행 커널 = 이웃 다수(블렌딩)
+10.0.21.12 | has | timedatectl show -p Timezone --value | ^Asia/Seoul$ | stg-01: 시간대
+10.0.21.12 | has | snap list amazon-ssm-agent | amazon-ssm-agent | stg-01: 공통 에이전트(SSM)
+10.0.21.12 | has | systemctl is-active amazon-cloudwatch-agent | ^active$ | stg-01: 공통 에이전트(CloudWatch)
+10.0.21.12 | has | cat /etc/cron.d/clamav-scan | clamscan | stg-01: 공통 ClamAV 검사 cron
+10.0.21.12 | has | systemctl is-active moayeyak nginx postgresql | \Aactive\nactive\nactive | stg-01: 역할 서비스(앱·nginx·PG)
+10.0.21.12 | hasnt | grep -rh "touch -d\|make_carryover\|nspawn" /var/log/auth.log /var/log/audit/audit.log | . | stg-01: 빌드 명령이 게스트 로그에 없음

@@ -1,5 +1,5 @@
 # 로컬 랩 경로 단언(infra/checks/paths.py). 호스트 = lab.sh 역할 이름. 주소가 바뀌면(구간 분리 등) 이 파일을 같이 고친다.
-# 공격자 출발지 예: web-01 10.0.20.11, app-01 10.0.20.10. 투영 주소 10.0.20.30 → farm stg-01
+# 로컬 구간 2개(11/23): int 10.0.20.0/24(app-01 .10, db-backup-01 .15, farm .40), pub 10.0.21.0/24(web-01 .11), router가 각 .1
 
 # ---- 모든 중계 홉: local 규칙(pref 0)이 살아 있어야 서버가 자기 주소로 오는 패킷을 받는다(11/22 먹통 원인)
 sensor | has | ip rule show pref 0 | lookup local | local 규칙 pref 0
@@ -12,31 +12,37 @@ farm   | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageFor
 app-01 | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageForeignRoutingPolicyRules=no | networkd 외래 규칙 보존
 web-01 | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageForeignRoutingPolicyRules=no | networkd 외래 규칙 보존
 
-# ---- 투영(Acalvio): 공격자 → 센서 → relay → farm → stg-01, 응답은 거꾸로 같은 터널
-sensor | route | 10.0.20.30 from 10.0.20.11 iif enp0s3 | relay | 센서: 투영 주소로 온 것 → 터널
-sensor | route | 10.0.20.11 from 10.0.20.30 iif relay | enp0s3 | 센서: 팜 응답 → 투영 NIC
+# ---- 투영(Acalvio): 공격자 → 센서(구간 NIC) → relay → farm → 디코이 VM(탭 ve-<이름>), 응답은 거꾸로 같은 터널
+#   stg-01 = pub 10.0.21.12(센서 enp0s8), dev-01 = int 10.0.20.11(센서 enp0s3) — 블렌딩 결과(baits/blend.py)
+sensor | route | 10.0.21.12 from 10.0.21.11 iif enp0s8 | relay | 센서: stg-01 주소로 온 것 → 터널
+sensor | route | 10.0.21.11 from 10.0.21.12 iif relay | enp0s8 | 센서: stg-01 응답(같은 구간) → pub NIC
+sensor | route | 10.0.20.10 from 10.0.21.12 iif relay | enp0s8 | 센서: stg-01 응답(다른 구간) → pub NIC(라우터 .1)
 sensor | has | iptables -t mangle -S PREROUTING | -i relay -j TTL --ttl-inc 1 | 센서: 팜 응답 TTL 보정
-sensor | has | iptables -t mangle -S PREROUTING | -d 10\.0\.20\.30/32 -i enp0s3 -j TTL --ttl-inc 1 | 센서: 투영 주소로 들어온 것 TTL 보정
-sensor | hasnt | ip -4 -o addr show | inet 10\.0\.20\.30/ | 센서: 투영 주소를 자기 주소로 두지 않음(fail-safe)
-farm   | route | 10.0.20.30 from 10.0.20.11 iif relay | ve-stg-01 | 팜: 터널로 온 것 → stg-01
-farm   | route | 10.0.20.11 from 10.0.20.30 iif ve-stg-01 | relay | 팜: stg-01 응답 → 터널(비면 LAN 직행 — 11/23 키 교환 멈춤)
-farm   | has | ip route show 10.0.20.30/32 | blackhole 10\.0\.20\.30 .*metric 1000 | 팜: stg-01이 죽어도 LAN으로 새지 않음
+sensor | has | iptables -t mangle -S PREROUTING | -d 10\.0\.21\.12/32 -i enp0s8 -j TTL --ttl-inc 1 | 센서: stg-01로 들어온 것 TTL 보정
+sensor | hasnt | ip -4 -o addr show | inet 10\.0\.2[01]\.(11|12)/ | 센서: 투영 주소를 자기 주소로 두지 않음(fail-safe)
+farm   | route | 10.0.21.12 from 10.0.21.11 iif relay | ve-stg-01 | 팜: 터널로 온 것 → stg-01 VM
+farm   | route | 10.0.21.11 from 10.0.21.12 iif ve-stg-01 | relay | 팜: stg-01 응답 → 터널(비면 LAN 직행 — 11/23 키 교환 멈춤)
+farm   | has | ip route show table 120 | unreachable default .*metric 4000 | 팜: 터널이 없으면 응답을 버림(fail-closed)
+farm   | has | ip route show 10.0.21.12/32 | blackhole 10\.0\.21\.12 .*metric 1000 | 팜: stg-01이 죽어도 LAN으로 새지 않음
+farm   | hasnt | ip -4 -o addr show | inet 10\.0\.2[01]\.1/ | 팜: 게이트웨이(.1)를 자기 주소로 두지 않음(라우터 ARP 가로채기 — 11/23)
+farm   | has | sysctl -n net.ipv4.conf.all.arp_ignore | ^1$ | 팜: 다른 NIC 주소로 LAN ARP에 답하지 않음
 farm   | has | iptables -t mangle -S PREROUTING | -i relay -j TTL --ttl-inc 1 | 팜: 터널로 온 것 TTL 보정
 farm   | has | iptables -t mangle -S PREROUTING | -i ve-\+ -j TTL --ttl-inc 1 | 팜: 디코이 응답 TTL 보정
 farm   | has | iptables -t mangle -S PREROUTING | -i edh1 -j TTL --ttl-inc 1 | 팜: edh1 TTL 보정
 farm   | has | iptables -t mangle -S PREROUTING | -i edh2 -j TTL --ttl-inc 1 | 팜: edh2 TTL 보정
+farm   | has | systemctl is-active guest@stg-01 | ^active$ | 팜: stg-01 VM 동작
 
 # ---- 트랩 중계(Illusive): 공격자 → EDH 빈 포트 → (DNAT 169.254.200.1) wg0 → farm edhN → 트랩(EDH 주소), 응답은 같은 터널
 app-01 | route | 169.254.200.1 | wg0 | app-01(EDH): 트랩 중계 주소 → wg0
 app-01 | has | nft list table ip local_fwd | daddr 10\.0\.20\.10 tcp dport 6379 .*dnat to 169\.254\.200\.1 | app-01: 6379 → 중계 주소
 web-01 | route | 169.254.200.1 | wg0 | web-01(EDH): 트랩 중계 주소 → wg0
-web-01 | has | nft list table ip local_fwd | daddr 10\.0\.20\.11 tcp dport 8080 .*dnat to 169\.254\.200\.1 | web-01: 8080 → 중계 주소
+web-01 | has | nft list table ip local_fwd | daddr 10\.0\.21\.11 tcp dport 8080 .*dnat to 169\.254\.200\.1 | web-01: 8080 → 중계 주소
 farm   | has | nft list table ip edh_1 | iifname "edh1" ip daddr 169\.254\.200\.1 dnat to 10\.0\.20\.10 | 팜: edh1 중계 주소 → 트랩 주소(app-01)
-farm   | has | nft list table ip edh_2 | iifname "edh2" ip daddr 169\.254\.200\.1 dnat to 10\.0\.20\.11 | 팜: edh2 중계 주소 → 트랩 주소(web-01)
-farm   | route | 10.0.20.10 from 10.0.20.11 iif edh1 | ve-trap-app-01 | 팜: edh1 → trap-app-01
-farm   | route | 10.0.20.11 from 10.0.20.10 iif ve-trap-app-01 | edh1 | 팜: trap-app-01 응답 → edh1
-farm   | route | 10.0.20.11 from 10.0.20.10 iif edh2 | ve-trap-web-01 | 팜: edh2 → trap-web-01
-farm   | route | 10.0.20.10 from 10.0.20.11 iif ve-trap-web-01 | edh2 | 팜: trap-web-01 응답 → edh2
+farm   | has | nft list table ip edh_2 | iifname "edh2" ip daddr 169\.254\.200\.1 dnat to 10\.0\.21\.11 | 팜: edh2 중계 주소 → 트랩 주소(web-01)
+farm   | route | 10.0.20.10 from 10.0.21.11 iif edh1 | ve-trap-app-01 | 팜: edh1 → trap-app-01
+farm   | route | 10.0.21.11 from 10.0.20.10 iif ve-trap-app-01 | edh1 | 팜: trap-app-01 응답 → edh1
+farm   | route | 10.0.21.11 from 10.0.20.10 iif edh2 | ve-trap-web-01 | 팜: edh2 → trap-web-01
+farm   | route | 10.0.20.10 from 10.0.21.11 iif ve-trap-web-01 | edh2 | 팜: trap-web-01 응답 → edh2
 app-01 | has | iptables -t mangle -S LOCAL_FWD | -i wg0 -j TTL --ttl-inc 1 | app-01: 트랩 응답 TTL 보정(moa-notify)
 app-01 | has | iptables -t mangle -S PREROUTING | -j LOCAL_FWD | app-01: TTL 보정 체인 연결
 web-01 | has | iptables -t mangle -S LOCAL_FWD | -i wg0 -j TTL --ttl-inc 1 | web-01: 트랩 응답 TTL 보정(moa-notify)
@@ -49,3 +55,8 @@ app-01 | has | cat /sys/class/net/wg0/mtu | ^1500$ | app-01 wg0 MTU = LAN
 web-01 | has | cat /sys/class/net/wg0/mtu | ^1500$ | web-01 wg0 MTU = LAN
 sensor | hasnt | iptables -t mangle -S | TCPMSS | 센서: MSS 조정 없음(손으로 넣은 잔재 포함 — 11/23 발견)
 farm   | hasnt | iptables -t mangle -S | TCPMSS | 팜: MSS 조정 없음
+
+# ---- 로컬 라우터(VPC 라우터 흉내, 로컬 전용): 서브넷 사이 TTL 안 줄임
+router | has | iptables -t mangle -S PREROUTING | -d 10\.0\.21\.0/24 -i enp0s3 -j TTL --ttl-inc 1 | 라우터: int → pub TTL 보정
+router | has | iptables -t mangle -S PREROUTING | -d 10\.0\.20\.0/24 -i enp0s8 -j TTL --ttl-inc 1 | 라우터: pub → int TTL 보정
+web-01 | route | 10.0.20.10 | enp0s3 | web-01: int 구간 → 라우터(같은 NIC)

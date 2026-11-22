@@ -164,6 +164,38 @@ def addresses():
     return {"ifaces": out, "default_iface": dflt}
 
 
+def platform():
+    """블렌딩용(디코이를 이웃과 같은 패치 수준·커널로): 커널, OS, 공격자에게 버전이 보이는 패키지(배너·서버 응답)"""
+    osr = {}
+    try:
+        for line in open("/etc/os-release"):
+            k, _, v = line.strip().partition("=")
+            osr[k] = v.strip('"')
+    except OSError:
+        pass
+    pk = {}
+    for line in run("dpkg-query", "-W", "-f", "${Package} ${db:Status-Status} ${Version}\n",
+                    "openssh-server", "nginx", "postgresql-16", "redis-server", "python3", "linux-image-virtual").splitlines():
+        p = line.split()
+        if len(p) == 3 and p[1] == "installed":
+            pk[p[0]] = p[2]
+    # 마지막 패키지 업그레이드 시각(UTC) — 디코이를 같은 아카이브 스냅숏으로 맞추는 기준(최신으로 올리면 이웃보다 앞서 커널이 달라짐, 11/23)
+    import glob, gzip, time as _t
+    last = None
+    for f in glob.glob("/var/log/apt/history.log*"):
+        try:
+            text = (gzip.open(f, "rt", errors="replace") if f.endswith(".gz") else open(f, errors="replace")).read()
+        except OSError:
+            continue
+        for block in text.split("\n\n"):
+            m = re.search(r"^Start-Date: (\d{4}-\d\d-\d\d)\s+(\d\d:\d\d:\d\d)", block, re.M)
+            if m and re.search(r"^(Upgrade|Install): ", block, re.M):
+                t = _t.mktime(_t.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S"))
+                last = max(last or 0, t)
+    apt_last = _t.strftime("%Y%m%dT%H%M%SZ", _t.gmtime(last + 60)) if last else None
+    return {"kernel": os.uname().release, "os": osr.get("PRETTY_NAME"), "packages": pk, "apt_snapshot": apt_last}
+
+
 def main():
     svcs = services()
     hostnames = sorted({k.get("host") for s in svcs for e in s["env_files"] for k in e["keys"] if k.get("host")})
@@ -177,6 +209,7 @@ def main():
         "processes": sorted(set(run("ps", "-eo", "comm=").split())),
         "listening": listening(),
         "net": addresses(),
+        "platform": platform(),
     }, ensure_ascii=False))
 
 

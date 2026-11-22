@@ -324,4 +324,19 @@ class CacheHint:
         return [{"kind": "block", "path": a["path"], "block": blk, "mtime": ts(a["file_mtime"])}]
 
 
-TYPES = {t.name: t for t in (EnvDbUrl(), SshConfig(), History(), AwsProfile(), AgentSession(), SyncService(), DecoyPort(), CacheHint())}
+# ------------------------------------------------------------------ 투영 디코이(Acalvio 투영): 자리는 서버 하나가 아니라 구간 — blend.py가 정하고 엔진이 배치
+class Projection:
+    name = "projection"
+
+    def match(self, ctx, host):
+        return []  # 서버별 규칙이 아님(engine.plan_projection)
+
+    def new_ident(self, a, used):
+        return {"kind": "projection", "value": f"{a['name']}@{a['addr'].split('/')[0]}"}
+
+    def ops(self, a, ident, dest):
+        return []  # 여러 단계(센서 → 팜 VM)라 엔진의 place_projection이 한다
+
+
+TYPES = {t.name: t for t in (EnvDbUrl(), SshConfig(), History(), AwsProfile(), AgentSession(), SyncService(), DecoyPort(), CacheHint(),
+                             Projection())}

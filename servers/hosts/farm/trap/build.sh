@@ -105,7 +105,9 @@ cat > "/etc/systemd/network/10-ve-$NAME.network" <<EOF
 Name=ve-$NAME
 
 [Network]
-Address=$GW/32
+# 게이트웨이(.1)를 팜 자신의 주소로 두지 않는다 — 두면 팜이 LAN에서 진짜 라우터(.1)의 ARP를 가로챈다(Linux는 어느 NIC로 온 ARP든
+# 자기 주소면 답함, 11/23 구간 분리 때 발견). 탭엔 링크 로컬만, 게이트웨이 ARP는 proxy ARP가 답한다(팜이 그 주소로 가는 경로를 LAN 쪽에 가짐)
+Address=169.254.31.2/32
 IPv4ProxyARP=yes
 LinkLocalAddressing=no
 IPv6AcceptRA=no

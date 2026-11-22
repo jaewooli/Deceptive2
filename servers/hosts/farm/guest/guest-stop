@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""guest@<이름> 정지: ACPI 전원 버튼(system_powerdown) → 게스트가 정상 종료(SIGTERM이면 QEMU가 바로 끝나 파일시스템이 상할 수 있음)."""
+import os, socket, sys, time
+n = sys.argv[1]
+pid = int(os.environ.get("MAINPID", "0") or 0)
+try:
+    s = socket.socket(socket.AF_UNIX); s.connect(f"/run/guest-{n}.mon"); s.sendall(b"system_powerdown\n"); s.close()
+except OSError:
+    sys.exit(0)
+for _ in range(110):
+    if not pid or not os.path.exists(f"/proc/{pid}"):
+        break
+    time.sleep(1)

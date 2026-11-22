@@ -1,0 +1,23 @@
+[Unit]
+Description=guest %i
+# 응답 경로(relay 터널 PostUp)·탭 주소(networkd 10-ve-%i.network)가 먼저 있어야 한다(11/23: 경로가 비면 응답이 터널을 우회)
+After=wg-quick@relay.service systemd-networkd.service
+Wants=wg-quick@relay.service
+
+[Service]
+EnvironmentFile=/etc/guest/%i.env
+# 로컬 랩 VM(infra/local-vm/vm.sh)과 같은 기계 모양: q35·KVM·virtio 디스크·virtio NIC·balloon. NIC는 슬롯 3(게스트 enp0s3)
+# balloon free-page-reporting은 끈다: 3중 중첩(Hyper-V → WSL2 KVM → farm KVM)에서 켜면 게스트 커널 코드 페이지가 깨져 Oops(11/23 apt 중 pipe_poll+0x0)
+ExecStart=/usr/bin/qemu-system-x86_64 -name %i -machine q35 -accel kvm -cpu host -m ${MEM} -smp ${CPUS} \
+  -drive file=/var/lib/guests/%i.qcow2,if=virtio,format=qcow2 \
+  -netdev tap,id=n0,ifname=ve-%i,script=no,downscript=no -device virtio-net-pci,netdev=n0,mac=${MAC},addr=3 \
+  -device virtio-balloon-pci \
+  -display none -serial file:/var/log/guests/%i.log -monitor unix:/run/guest-%i.mon,server,nowait
+ExecStartPost=/usr/local/lib/relay/guest-up %i
+ExecStop=/usr/local/lib/relay/guest-stop %i
+TimeoutStopSec=120
+# 첫 부팅(빌드)은 스스로 꺼진다 → 다시 켜지 않음
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

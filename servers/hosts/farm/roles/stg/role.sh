@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
-# stg-01 역할 — 옛 스테이징(2024-06 구축, 2025-05-12 마지막 배포 뒤 안 씀, 2026-11 재구축 때 같이 옮겨짐)
-# 팜에서 root로, build.sh 다음에. 패키지 설치는 컨테이너를 멈추고 팜의 네트워크로 한다(컨테이너 망은 투영 주소뿐)
+# stg 역할(이름은 블렌딩, 예: stg-01) — 옛 스테이징(2024-06 구축, 2025-05-12 마지막 배포 뒤 안 씀, 2026-11 재구축 때 같이 옮겨짐)
+# 팜에서 root로. 디코이는 KVM VM(../guest/guest.sh): create(첫 부팅에 패치·패키지·공통 베이스) → offline(디스크 마운트) → 이 스크립트 → online
+# 여기서는 VM이 꺼진 디스크에 비부팅 nspawn으로만 작업한다 — 게스트 커널이 안 돌아 게스트의 감사·인증 로그에 빌드 명령이 안 남는다
 #   sudo ./role.sh <배포 묶음 디렉터리> <db-backup-01 주소> <db-backup-01 ed25519 호스트 공개키 파일>
+# 패키지(create에 넘김): nginx,postgresql-16,python3-venv,git
 # 배포 묶음: app/(build_history.py --until 12 결과, .git 포함), base/postgresql/, carryover/make_carryover.py
 set -euo pipefail
 B=${1:?배포 묶음}; DBB_IP=${2:?db-backup-01 주소}; DBB_KEY=${3:?db-backup-01 호스트 공개키}
-NAME=stg-01; ROOT=/var/lib/machines/$NAME
+NAME=${GUEST_NAME:-stg-01}; ROOT=/var/lib/machines/$NAME   # 이름은 블렌딩이 정함(baits/blend.py)
 NS=(systemd-nspawn -q --settings=false --register=no --resolv-conf=bind-uplink -D "$ROOT" --pipe --)
+NSP=(systemd-nspawn -q --settings=false --register=no --private-network -D "$ROOT" --pipe --)   # 사설망(루프백만)
 BUILT="2024-06-05 16:12:09"          # 스테이징 첫 구축(운영보다 1주 먼저)
 LAST_DEPLOY="2025-05-12 13:58:31"    # 마지막 배포(의존성 업데이트 커밋 2025-05-12 11:47 다음)
 stamp() { touch -h -d "$1" "${@:2}"; }
 
-systemctl stop systemd-nspawn@$NAME 2>/dev/null || true
-
-# ---- 패키지: 같은 회사 서버와 같은 패치 수준(debootstrap은 출시판만 깐다 → SSH 배너가 달라짐, 11/22 실측)
-"${NS[@]}" bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update -q && apt-get -y -q full-upgrade &&
-  apt-get install -y -q nginx postgresql-16 python3-venv auditd clamav unattended-upgrades logrotate cron >/dev/null'
-
-# ---- sshd: EC2 클라우드 이미지 기본값과 같게(debootstrap 기본은 비밀번호 인증을 받아 E1 단서 — 11/22)
-printf 'PasswordAuthentication no\n' > "$ROOT/etc/ssh/sshd_config.d/60-cloudimg-settings.conf"
+findmnt -rno SOURCE "$ROOT" >/dev/null || { echo "$ROOT 가 마운트돼 있지 않음 — guest.sh offline $NAME 먼저" >&2; exit 2; }
+# 패키지·패치 수준·sshd 기본값·ubuntu 계정은 클라우드 이미지 + 첫 부팅 cloud-init이 이미 만들었다(11/22 debootstrap의 D2·D3·E1 단서 해소)
 
 # ---- 계정: EC2 기본 ubuntu + 앱 계정 deploy(web-01과 같은 이름 규칙)
 "${NS[@]}" bash -c 'id ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash -u 1000 -G sudo,adm ubuntu
@@ -100,14 +97,13 @@ chmod 440 "$ROOT/etc/sudoers.d/deploy"; stamp "2024-06-05 16:44:10" "$ROOT/etc/s
 
 # ---- 컨테이너 안에서 PG를 띄워 2025-05-12 덤프를 만들고 복원 상태로 남긴다
 install -d "$ROOT/root/.c"; cp "$B/carryover/make_carryover.py" "$ROOT/root/.c/"
-systemctl start systemd-nspawn@$NAME
-for i in $(seq 60); do systemd-run -M $NAME -q --wait -P pg_isready -q 2>/dev/null && break; sleep 1; done
-systemd-run -M $NAME -q --wait -P python3 -I /root/.c/make_carryover.py --dump-at 2025-05-12 --dump-out /home/deploy/moayeyak-20250512.sql.gz --keep-db moayeyak
-rm -rf "$ROOT/root/.c"
+# PG는 비부팅 nspawn 안에서 직접 띄운다(사설망 — 루프백만, 팜 LAN에 5432가 잠깐도 안 열림)
 PW=$(sed -n 's|^DATABASE_URL=postgresql+psycopg://moayeyak:\([^@]*\)@.*|\1|p' "$ROOT/srv/app/.env")
-systemd-run -M $NAME -q --wait -P runuser -u postgres -- psql -qX -c "ALTER ROLE moayeyak LOGIN PASSWORD '$PW';" >/dev/null
-systemd-run -M $NAME -q --wait -P chown -R deploy:deploy /home/deploy
-systemd-run -M $NAME -q --wait -P systemctl restart moayeyak nginx
+"${NSP[@]}" bash -c "set -e; pg_ctlcluster 16 main start
+  python3 -I /root/.c/make_carryover.py --dump-at 2025-05-12 --dump-out /home/deploy/moayeyak-20250512.sql.gz --keep-db moayeyak
+  runuser -u postgres -- psql -qX -c \"ALTER ROLE moayeyak LOGIN PASSWORD '$PW';\" >/dev/null
+  pg_ctlcluster 16 main stop; chown -R deploy:deploy /home/deploy"
+rm -rf "$ROOT/root/.c"
 
 # ---- 시각: 첫 구축·마지막 배포에 맞춘다(재구축 때 rsync -a로 옮김 → mtime 보존, ctime은 재구축일)
 stamp "$BUILT" "$ROOT"/etc/ssh/ssh_host_* "$H/.bashrc" "$H/.profile" "$H/.bash_logout" "$ROOT/home/ubuntu"/.[bp]*
@@ -119,4 +115,4 @@ find "$ROOT/srv/app/.git" -exec touch -h -d "2025-05-12 13:57:58" {} +
 stamp "2024-06-05 16:31:44" "$ROOT/srv/app/.env" "$ROOT/srv/app/var" "$ROOT/srv/app/var/receipts"
 stamp "2025-05-12 13:24:52" "$H/moayeyak-20250512.sql.gz"
 stamp "2025-05-12 14:02:16" "$H/.bash_history" "$H/.ssh" "$H"
-echo "stg-01 role ok: $(systemd-run -M $NAME -q --wait -P sh -c 'systemctl is-active moayeyak nginx postgresql ssh | tr "\n" " "')"
+echo "$NAME role ok(서비스 확인은 guest.sh online 뒤)"

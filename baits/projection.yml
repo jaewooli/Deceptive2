@@ -1,0 +1,23 @@
+# 투영 디코이 역할 템플릿 — Acalvio 블렌딩("주변 이름·서비스와 섞이게")을 AI 대신 규칙으로(HANDOFF 8절 3번).
+# 역할은 사용자 결정: stg(옛 스테이징, 11/22), dev(옛 개발 서버, 11/23). 이름·구간·주소·패치 수준은 baits/blend.py가 주변 서버 맥락으로 정한다
+templates:
+  stg:
+    role: 옛 스테이징(운영 웹과 같은 앱, 2025-05-12 마지막 배포)
+    tier: web            # 이 계층의 서버가 사는 구간에 둔다(스테이징은 운영 웹 옆)
+    services: [22, 80]
+    packages: [nginx, postgresql-16, python3-venv, git]
+    pg: true
+    mem: 768
+  dev:
+    role: 옛 개발 서버(개발자 2명이 같이 쓰던 서버)
+    tier: data           # 개발 DB가 있는 서버 → DB 서버가 사는 구간
+    services: [22, 5432]
+    packages: [postgresql-16, python3-venv, git]
+    pg: true
+    mem: 640
+# 계층 판정: 그 서버에서 도는 프로세스(collect의 processes)
+tiers:
+  web: [nginx, gunicorn]
+  data: [postgres]
+# AWS 서브넷은 .0~.3·마지막 주소를 예약한다 — 로컬도 같은 규칙(로컬 router .1)
+reserved_low: 3
