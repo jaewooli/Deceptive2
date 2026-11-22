@@ -35,6 +35,9 @@ fetch_image() {
 make_seed() {
   [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -f "$KEY" -C local-vm
   mkdir -p "$SEED"
+  # instance-id를 유지한다: 바뀌면 cloud-init이 새 인스턴스로 보고 SSH 호스트 키 등을 다시 만든다
+  # (EC2도 재부팅 때 instance-id가 같다 — 바뀌면 구축 흔적 B1·B4·B5가 오염됨, validation/checks.md)
+  [ -f "$SEED/meta-data" ] && return
   cat > "$SEED/meta-data" <<EOF
 instance-id: $NAME-$(date +%s)
 local-hostname: $NAME
