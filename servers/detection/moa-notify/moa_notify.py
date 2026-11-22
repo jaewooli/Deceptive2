@@ -209,6 +209,90 @@ def _is_conn_related(msg):
             or any(p.match(msg) for p, _ in PG_RESULT))
 
 
+# ---------------------------------------------------------------- 안 쓰는 포트로 온 연결(전달 규칙)
+RE_KLOG = re.compile(r"^(?P<ts>\S+) \S+ kernel: (?:\[[\d. ]+\] )?(?P<prefix>\S+) .*?SRC=(?P<src>\S+) DST=(?P<dst>\S+) .*?PROTO=TCP SPT=(?P<spt>\d+) DPT=(?P<dpt>\d+)")
+
+
+def listening_ports():
+    """지금 LISTEN 중인 TCP 포트(모든 주소). /proc만 읽는다"""
+    out = set()
+    for f in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            for line in open(f).read().splitlines()[1:]:
+                parts = line.split()
+                if parts[3] == "0A":
+                    out.add(int(parts[1].rsplit(":", 1)[1], 16))
+        except OSError:
+            pass
+    return out
+
+
+class ForwardedPorts:
+    """이 서버에서 쓰지 않는 포트로 온 연결을 다른 서버로 넘기고(nftables), 넘길 때마다 알린다.
+    실제 프로그램이 그 포트를 쓰기 시작하면 규칙을 빼고(양보) 알린다."""
+
+    name = "ports"
+
+    def __init__(self, cfg, host):
+        self.host = host
+        self.addr = cfg["address"]
+        self.prefix = cfg.get("prefix", "IN-FWD")
+        self.table = cfg.get("table", "local_fwd")
+        self.ports = {int(p["port"]): p["to"] for p in cfg.get("ports", [])}
+        self.released = set()
+        self.next_check = 0
+        busy = listening_ports() & set(self.ports)
+        for p in sorted(busy):  # 학습: 이미 쓰는 포트는 처음부터 넘기지 않는다
+            self.released.add(p)
+            log.info("포트 %d 사용 중 — 넘기지 않음", p)
+        self.apply()
+
+    def active(self):
+        return {p: t for p, t in self.ports.items() if p not in self.released}
+
+    def apply(self):
+        import subprocess
+        # nat 체인은 연결의 첫 패킷만 본다 → log는 연결당 한 줄
+        pre = [f"    ip daddr {self.addr} tcp dport {p} log prefix \"{self.prefix} \" level info dnat to {to}"
+               for p, to in sorted(self.active().items())]
+        post = [f"    ip daddr {to.rsplit(':', 1)[0]} tcp dport {to.rsplit(':', 1)[1]} masquerade" for p, to in sorted(self.active().items())]
+        text = (f"table ip {self.table}\ndelete table ip {self.table}\ntable ip {self.table} {{\n"
+                f"  chain pre {{\n    type nat hook prerouting priority dstnat; policy accept;\n" + "\n".join(pre) + "\n  }\n"
+                f"  chain post {{\n    type nat hook postrouting priority srcnat; policy accept;\n" + "\n".join(post) + "\n  }\n}\n")
+        try:
+            with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
+                f.write("1")
+        except OSError as e:
+            log.warning("ip_forward: %s", e)
+        r = subprocess.run(["/usr/sbin/nft", "-f", "-"], input=text, text=True, capture_output=True)
+        if r.returncode:
+            log.error("nft: %s", r.stderr.strip())
+        else:
+            log.info("넘기는 포트: %s", ", ".join(str(p) for p in sorted(self.active())) or "-")
+
+    def feed(self, line):
+        m = RE_KLOG.match(line)
+        if not m or m.group("prefix") != self.prefix:
+            return []
+        return [{"host": self.host, "source": "포트", "client": f"{m.group('src')}:{m.group('spt')}", "user": None,
+                 "database": None, "result": f"{m.group('dst')}:{m.group('dpt')} 연결(넘김)", "log_ts": m.group("ts"),
+                 "lines": [line.split(" kernel: ", 1)[-1][:300]]}]
+
+    def tick(self):
+        now = time.monotonic()
+        if now < self.next_check:
+            return []
+        self.next_check = now + 1
+        busy = listening_ports() & set(self.active())
+        if not busy:
+            return []
+        self.released |= busy
+        self.apply()
+        ts = datetime.now().astimezone().isoformat(timespec="seconds")
+        return [{"host": self.host, "source": "포트", "client": "-", "user": None, "database": None,
+                 "result": f"{p} 실제 프로그램이 사용 시작 → 넘기기 중단", "log_ts": ts, "lines": []} for p in sorted(busy)]
+
+
 # ---------------------------------------------------------------- 알림 보내기
 class Notifier:
     def __init__(self, cfg):
@@ -265,7 +349,7 @@ def format_text(ev):
 
 
 # ---------------------------------------------------------------- 실행
-WATCHERS = {"postgresql": PgConnections}
+WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts}
 
 
 def load_state(path):

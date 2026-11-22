@@ -39,13 +39,25 @@ systemctl restart wg-quick@relay
 
 # 컨테이너가 뜰 때 팜 쪽 veth: 게이트웨이 주소 + proxy ARP, 투영 주소 경로, 응답은 터널로
 install -d /usr/local/lib/relay /etc/systemd/system/systemd-nspawn@"$NAME".service.d
+# veth 주소·proxy ARP는 networkd 설정으로 고정(스크립트로 넣으면 기본 80-container-ve.network가 지운다 — 11/22 경쟁)
+cat > /etc/systemd/network/10-$VETH.network <<EOF
+[Match]
+Name=$VETH
+
+[Network]
+Address=$GW/32
+IPv4ProxyARP=yes
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+ConfigureWithoutCarrier=yes
+EOF
+systemctl enable --now systemd-networkd >/dev/null 2>&1 || true
+networkctl reload 2>/dev/null || true
 cat > /usr/local/lib/relay/veth-up <<EOF
 #!/bin/sh
-# systemd-nspawn@$NAME 시작 뒤: 팜 쪽 veth 설정
+# systemd-nspawn@$NAME 시작 뒤: 투영 주소 경로, 응답은 터널로
 for i in \$(seq 50); do ip link show $VETH >/dev/null 2>&1 && break; sleep 0.2; done
-ip link set $VETH up
-ip addr replace $GW/32 dev $VETH
-sysctl -q -w net.ipv4.conf.$VETH.proxy_arp=1 net.ipv4.conf.$VETH.rp_filter=2
+sysctl -q -w net.ipv4.conf.$VETH.rp_filter=2
 ip route replace $X/32 dev $VETH
 ip rule show pref 50 | grep -q . || ip rule add pref 50 iif $VETH lookup $T_OUT
 ip route replace default dev relay table $T_OUT
