@@ -197,3 +197,9 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - 사용자 결정 대기: IAM 사용자 이름 `backup-legacy`(05 23절 끝)
 - 기록만: web-01·app-01·디코이 `/root` 시각은 오늘(원래 값 모름)
 
+
+## 18. 다음 세션 첫 순서(11/24 사용자: "내일 마저")
+1. 11/27분 ① 출발지 포렌식(관리 쪽 상관기, 스위치 `forensics`) → ② 디코이 행동 기록(db-backup-01 = moa-notify user-cmd 첨부, 투영 디코이 = 팜이 디스크 읽기 전용 — 일관성 먼저 실측, 스위치 `engagement`) → ③ 침투 체인 상관분석 → ④ 시나리오 1·3 로컬 리허설·기준선 정상 작업 스크립트
+2. 11/28 전 미리: 서울 리전 metal/중첩 지원 인스턴스(C8i·M8i·R8i) 가능 여부, 결정 대기 2개(IAM 사용자 이름 `backup-legacy` 유지 여부, AWS hostname 정하는 법 — 로컬 `lt-decoy`)
+3. 블로그 진행 글(05 22·23절이 글감)
+- 랩 상태: VM 5대 + WSL 팜(디코이 stg-01·dev-01) 켜져 있음. WSL이 재시작되면 `lab.sh up all` + `sudo infra/local-vm/farm-host.sh up`
