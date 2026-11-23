@@ -123,20 +123,26 @@ class SshConfig:
     def ops(self, a, ident, dest):
         h, i = a["home"], a["indent"]
         block = f"Host {DECOY}\n{i}HostName {dest['ip']}\n{i}User backup\n{i}IdentityFile ~/.ssh/{a['keyname']}\n"
-        # 키는 옛 백업 서버 시절(2024-06~2025-09)에 만든 것처럼
-        made = ts(time.mktime((2024, 7, 2, 10, 14, 33, 0, 0, -1)))
+        # 리포트 기능을 만들던 때(2024-07, git log 2024-07-08 "월간 매장 리포트: 백업 서버 DB 사본에서 집계") 사본 상태를 보러 쓰던 키.
+        # 사람이 한 순서대로 시각을 벌린다(11/23 고침 — 셋 다 같은 초면 스크립트로 만든 티): ssh-keygen(키 둘) → config 편집 → 첫 접속(known_hosts)
+        made = time.mktime((2024, 7, 2, 10, 14, 33, 0, 0, -1))
+        t_key, t_conf, t_kh = ts(made), ts(made + 95), ts(made + 128)
         own = {"owner": a["user"], "group": str(a["gid"])}
+        # ~/.ssh 시각 = 안에서 마지막으로 항목이 생긴 때(첫 접속의 known_hosts). 원래 더 늦었으면 그대로
+        dir_t = ts(max(a["ssh_dir_mtime"] or 0, made + 128))
         return [
-            {"kind": "dir", "path": f"{h}/.ssh", "mode": "0700", **own, "mtime": ts(a["ssh_dir_mtime"]) or made},
-            {"kind": "file", "path": f"{h}/.ssh/{a['keyname']}", "content": ident["private"], "mode": "0600", **own, "mtime": made},
-            {"kind": "file", "path": f"{h}/.ssh/{a['keyname']}.pub", "content": ident["public"] + "\n", "mode": "0644", **own, "mtime": made},
-            {"kind": "block", "path": f"{h}/.ssh/config", "block": block, "mode": "0600", **own, "mtime": ts(a["config_mtime"]) or made},
+            {"kind": "dir", "path": f"{h}/.ssh", "mode": "0700", **own, "mtime": dir_t},
+            {"kind": "file", "path": f"{h}/.ssh/{a['keyname']}", "content": ident["private"], "mode": "0600", **own, "mtime": t_key},
+            {"kind": "file", "path": f"{h}/.ssh/{a['keyname']}.pub", "content": ident["public"] + "\n", "mode": "0644", **own, "mtime": t_key},
+            {"kind": "block", "path": f"{h}/.ssh/config", "block": block, "mode": "0600", **own, "mtime": ts(a["config_mtime"]) or t_conf,
+             "own_mtime": not a["config_mtime"]},
             # 목적지 쪽: 디코이 backup 계정이 이 키를 받아 준다(로그인 = 경보, 세션 기록)
-            {"kind": "decoy_key", "decoy": DECOY, "user": "backup", "line": f"{ident['public']}"},
+            {"kind": "decoy_key", "decoy": DECOY, "user": "backup", "line": f"{ident['public']}", "added": ts(made + 40)},  # 키 만들고 → 백업 서버에 등록 → config
         ] + [
             # 써 본 서버라면 known_hosts에 있다 — 없으면 첫 접속 때 "처음 보는 호스트" 질문이 떠서 단서(11/22 실측)
             {"kind": "line", "path": f"{h}/.ssh/known_hosts", "regexp": "^" + __import__("re").escape(l) + "$", "line": l,
-             "absent_line": None, "mode": "0600", **own, "mtime": ts(a.get("known_hosts_mtime")) or made}
+             "absent_line": None, "mode": "0600", **own, "mtime": ts(a.get("known_hosts_mtime")) or t_kh,
+             "own_mtime": not a.get("known_hosts_mtime")}
             for l in ident["known_hosts"]
         ]
 
@@ -178,10 +184,12 @@ class AwsProfile:
 
     def ops(self, a, ident, dest):
         sec = f"[{self.PROFILE}]\naws_access_key_id = {ident['value']}\naws_secret_access_key = {ident['secret']}\n"
-        made = ts(time.mktime((2024, 6, 12, 15, 2, 11, 0, 0, -1)))
+        # 서사(11/23 고침 — 예전 값 2024-06-12는 S3 이전보다 1년 3개월 앞서 말이 안 됨): 2025-09-15 S3로 옮기며 처음엔 이 키로 올림 →
+        # 다음 날 인스턴스 역할로 바꾸면서 키를 지우지 않고 프로필 이름만 [backup-legacy]로 바꿔 둠(스크립트가 안 쓰게). 같은 날 bin·.ssh도 정리(10:38)
+        made = ts(time.mktime((2025, 9, 16, 10, 36, 52, 0, 0, -1)))
         return [{"kind": "dir", "path": f"{a['home']}/.aws", "mode": "0755", "owner": a["user"], "group": str(a["gid"]), "mtime": made},
                 {"kind": "block", "path": f"{a['home']}/.aws/credentials", "block": sec, "mode": "0600", "owner": a["user"],
-                 "group": str(a["gid"]), "mtime": ts(a["cred_mtime"]) or made}]
+                 "group": str(a["gid"]), "mtime": ts(a["cred_mtime"]) or made, "own_mtime": not a["cred_mtime"]}]
 
 
 # ------------------------------------------------------------------ T4형: 잊힌 tmux 세션의 ssh-agent(메모리에만 있는 키)
@@ -203,7 +211,10 @@ class AgentSession:
     def ops(self, a, ident, dest):
         return [{"kind": "agent_session", "user": a["user"], "session": "0", "fingerprint": ident["value"], "private": ident["private"],
                  "reboot_ok": True},
-                {"kind": "decoy_key", "decoy": DECOY, "user": "backup", "line": ident["public"]}]
+                # 서사: 이서연이 백업 확인용으로 따로 만든 키(2025-02-17 — 그날 git log에 이서연 작업). S3 전환(2025-09) 전이어야 맞다.
+                # 키 파일은 웹 서버에 남아 있다가, 잊힌 세션에서 에이전트에 올린 뒤 지워짐
+                {"kind": "decoy_key", "decoy": DECOY, "user": "backup", "line": ident["public"],
+                 "added": ts(time.mktime((2025, 2, 17, 14, 3, 40, 0, 0, -1)))}]
 
 
 # ------------------------------------------------------------------ T5형: 꺼진 기능의 멈춘 동기화 서비스(환경변수)
@@ -213,7 +224,8 @@ class SyncService:
     # 꺼진 상태에서도 사본 DB 쪽 연결을 하나 잡아 둔다(핸드셰이크만, 데이터 없음) → 침투한 공격자의 netstat·ss·ip neigh에
     # 디코이가 보인다(Attivo US10375110 "연결 테이블 미끼"). 무작위 간격으로 끊고 다시 맺는다. 디코이 쪽 관문은 페이로드 없는 연결을 알리지 않는다
     SCRIPT = """#!/usr/bin/env python3
-# {feature} 사본 동기화 (2024-07). {flag}=false 이면 동기화는 쉬고 연결만 유지한다.
+# 월간 {feature}: 백업 서버 DB 사본 → 집계 테이블 갱신 (2024-07). {flag}=false 이면 갱신은 건너뛴다.
+# 사본 DB 앞 방화벽이 유휴 연결을 끊어 첫 갱신이 매번 타임아웃 나던 것 → 연결을 미리 잡아 두고 keepalive (2024-07-09)
 import logging, os, random, socket, time
 from urllib.parse import urlsplit
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
@@ -242,7 +254,7 @@ while True:
 
     # Attivo 연결 테이블을 끈 상태: 꺼진 기능답게 쉬기만 한다(연결 없음)
     IDLE = """#!/usr/bin/env python3
-# {feature} 사본 동기화 (2024-07). {flag}=false 이면 동기화는 쉰다.
+# 월간 {feature}: 백업 서버 DB 사본 → 집계 테이블 갱신 (2024-07). {flag}=false 이면 갱신은 건너뛴다.
 import logging, os, time
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 log = logging.getLogger("{name}")
@@ -277,11 +289,13 @@ while True:
         made = ts(time.mktime((2024, 7, 8, 16, 20, 5, 0, 0, -1)))
         cred = f"{ident['value']}:{ident['password']}@" if crumbs else ""
         url = f"{a['scheme']}://{cred}{DECOY}:5432/{a['db']}"
-        unit = (f"[Unit]\nDescription={a['prefix'].lower()} copy sync\nAfter=network-online.target\n\n[Service]\nUser={a['user']}\n"
+        unit = (f"[Unit]\nDescription=monthly {a['prefix'].lower()} aggregate sync\nAfter=network-online.target\n\n[Service]\nUser={a['user']}\n"
                 f"EnvironmentFile={a['env_file']}\nEnvironment=SYNC_DB_URL={url}\nEnvironment=SYNC_INTERVAL=86400\n"
                 f"ExecStart=/usr/bin/python3 /usr/local/bin/{a['name']}\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
         script = (self.SCRIPT if conn else self.IDLE).format(feature=a["prefix"].lower(), flag=a["flag"], name=a["name"])
-        return [{"kind": "file", "path": f"/usr/local/bin/{a['name']}", "content": script, "mode": "0755", "owner": "root", "group": "root", "mtime": made},
+        fixed = ts(time.mktime((2024, 7, 9, 11, 42, 17, 0, 0, -1)))   # 스크립트 주석의 keepalive 수정일(유닛은 처음 만든 날 그대로)
+        return [{"kind": "file", "path": f"/usr/local/bin/{a['name']}", "content": script, "mode": "0755", "owner": "root", "group": "root",
+                 "mtime": fixed if conn else made},
                 {"kind": "file", "path": f"/etc/systemd/system/{a['name']}.service", "content": unit, "mode": "0644", "owner": "root", "group": "root", "mtime": made},
                 {"kind": "unit", "name": f"{a['name']}.service", "mtime": made,
                  "files": [f"/usr/local/bin/{a['name']}", f"/etc/systemd/system/{a['name']}.service"]}]

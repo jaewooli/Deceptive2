@@ -35,18 +35,39 @@ def read(p):
 def write(p, text, op):
     mode = int(op.get("mode", "0644"), 8) if op.get("mode") else None
     old = os.stat(p) if os.path.exists(p) else None
+    d = os.path.dirname(p) or "."
+    dst = os.stat(d)   # 임시 파일을 만들기 전에(만든 뒤에 재면 이미 바뀐 시각을 "되돌림" — 11/23 실측)
     tmp = p + ".tmp~"
     with open(tmp, "w", errors="surrogateescape") as f:
         f.write(text)
     if old:
         os.chown(tmp, old.st_uid, old.st_gid)
         os.chmod(tmp, mode if mode is not None else old.st_mode & 0o7777)
-    d = os.path.dirname(p) or "."
-    dst = os.stat(d)
     os.replace(tmp, p)
     finish(p, op)
     # 임시 파일 + 바꿔치기는 상위 디렉터리 시각을 오늘로 바꾼다 → 되돌림(11/23: 디코이 /backup/.ssh가 오늘 시각 — "버려진 서버" 서사와 충돌)
     os.utime(d, ns=(dst.st_atime_ns, dst.st_mtime_ns))
+
+
+def keep_parent(p):
+    """새로 만들기·지우기도 상위 디렉터리 시각을 바꾼다 → 끝나고 되돌릴 함수(11/23: 스위치 끄고 켜기 뒤 ~/.ssh·~/.aws가 오늘 시각)"""
+    d = os.path.dirname(p) or "."
+    st = os.stat(d)
+    return lambda: os.utime(d, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
+def create(p, text, op):
+    back = keep_parent(p)
+    with open(p, "w", errors="surrogateescape") as f:
+        f.write(text)
+    finish(p, op)
+    back()
+
+
+def remove(p):
+    back = keep_parent(p)
+    os.remove(p)
+    back()
 
 
 def finish(p, op):
@@ -81,13 +102,15 @@ def do(op, mode):
         want = op["content"]
         if mode == "absent":
             if cur is not None:
-                os.remove(p)
+                remove(p)
             return "absent"
         if cur == want:
+            if mode == "apply":
+                finish(p, op)   # 미끼가 가진 파일 — 시각·권한을 다시 맞춘다
             return "ok"
         if mode == "check":
             return "drift"
-        write(p, want, op) if cur is not None else (open(p, "w").write(want), finish(p, op))
+        write(p, want, op) if cur is not None else create(p, want, op)
         return "changed"
     if k == "line":
         import re
@@ -102,6 +125,8 @@ def do(op, mode):
                 write(p, "".join(lines), op)
             return "absent"
         if idx and lines[idx[0]].rstrip("\n") == op["line"]:
+            if mode == "apply" and op.get("own_mtime"):
+                finish(p, op)
             return "ok"
         if mode == "check":
             return "drift"
@@ -122,16 +147,17 @@ def do(op, mode):
                 if rest.strip():
                     write(p, rest, op)
                 else:
-                    os.remove(p)  # 미끼가 만든 파일이었다 — 빈 파일을 남기면 그것도 흔적(11/22)
+                    remove(p)  # 미끼가 만든 파일이었다 — 빈 파일을 남기면 그것도 흔적(11/22)
             return "absent"
         if cur is not None and blk in cur:
+            if mode == "apply" and op.get("own_mtime"):
+                finish(p, op)   # 미끼가 만든 파일이면 시각도 미끼 것
             return "ok"
         if mode == "check":
             return "drift"
         text = blk if not cur else cur + ("" if cur.endswith("\n") else "\n") + "\n" + blk
         if cur is None:
-            open(p, "w").write(text)
-            finish(p, op)
+            create(p, text, op)
         else:
             write(p, text, op)
         return "changed"
@@ -222,11 +248,20 @@ def do(op, mode):
             return "gone" if not has_sess else "drift"
         if not has_sess:
             as_user("tmux", "new-session", "-d", "-s", sess, "-x", "200", "-y", "50", cwd=pw_.pw_dir)
-        # 키를 사용자 소유 0600 임시 파일로 → 세션 안에서 사람이 친 것처럼 ssh-agent·ssh-add → 파일 삭제
-        fd, kp = tempfile.mkstemp(prefix=".k", dir="/tmp")
-        os.write(fd, op["private"].encode()); os.close(fd)
-        os.chown(kp, pw_.pw_uid, pw_.pw_gid); os.chmod(kp, 0o600)
-        for line in ("cd /srv/app", "eval $(ssh-agent -s)", f"ssh-add {kp} && rm -f {kp}", "clear", "git log --oneline -3"):
+        # 사람이 한 것처럼: 키 파일을 에이전트에 올리고 파일은 지운다(키는 메모리에만). 11/23 고침 — 예전엔 /tmp/.k<난수>를 올리고 지우는
+        # 줄이라 사람 같지 않았고, 세션이 죽을 때마다(재부팅·재적용) 그 줄이 ~/.bash_history에 쌓였다(7번).
+        # 첫 줄은 앞 공백(HISTCONTROL=ignoreboth → 기록 안 됨)으로 이 셸의 기록 파일 쓰기를 끈다 — 잊힌 세션의 명령은 아직 파일에 없는 게 맞다
+        sshd = os.path.join(pw_.pw_dir, ".ssh")
+        kp = os.path.join(sshd, "id_ed25519_tmp")
+        back = keep_parent(kp)
+        create(kp, op["private"], {"kind": "file", "owner": user, "mode": "0600"})
+        as_user("tmux", "send-keys", "-t", sess, " unset HISTFILE", "Enter")
+        time.sleep(0.4)
+        as_user("tmux", "send-keys", "-t", sess, "C-l")          # 화면 지우기(키 — 명령이 아니라 기록에도 화면에도 안 남음)
+        time.sleep(0.3)
+        as_user("tmux", "clear-history", "-t", sess)             # 스크롤백에 남은 첫 줄까지
+        for line in ("cd /srv/app", "eval $(ssh-agent -s)", "ssh-add ~/.ssh/id_ed25519_tmp",
+                     "rm ~/.ssh/id_ed25519_tmp", "git log --oneline -3"):
             as_user("tmux", "send-keys", "-t", sess, line, "Enter")
             time.sleep(0.4)
         for _ in range(20):
@@ -235,6 +270,7 @@ def do(op, mode):
             time.sleep(0.3)
         if os.path.exists(kp):
             os.remove(kp)
+        back()
         return "changed" if find() else "failed"
     if k == "wg_key":
         # 터널 키(없으면 만듦) → 공개키를 돌려준다
@@ -259,7 +295,7 @@ def do(op, mode):
         if mode == "absent" and not op.get("on_absent"):
             return "absent"
         argv = op["on_absent"] if mode == "absent" else op["argv"]
-        fd, sp = tempfile.mkstemp(prefix=".r", dir="/root"); os.write(fd, op["script"].encode()); os.close(fd)
+        fd, sp = tempfile.mkstemp(prefix=".r", dir="/run")   # /root에 만들면 /root 시각이 바뀜(11/23) — /run은 tmpfs; os.write(fd, op["script"].encode()); os.close(fd)
         try:
             r = subprocess.run(["/bin/bash", sp, *argv], capture_output=True, text=True)
         finally:
@@ -272,13 +308,13 @@ def do(op, mode):
             return "failed"
         return "absent" if mode == "absent" else "changed"
     if k == "bundle":
-        # 디렉터리 묶음(tgz, base64)을 /root 아래 임시 경로에 풀고 entry를 실행한 뒤 지운다 — 투영 디코이처럼 스크립트 하나로 안 되는 작업
+        # 디렉터리 묶음(tgz, base64)을 /run 아래 임시 경로에 풀고 entry를 실행한 뒤 지운다 — 투영 디코이처럼 스크립트 하나로 안 되는 작업
         import base64, io, shutil, subprocess, tarfile, tempfile
         if mode == "check":
             return "ok"
         if mode == "absent" and not op.get("on_absent"):
             return "absent"
-        d = tempfile.mkdtemp(prefix=".b", dir="/root")
+        d = tempfile.mkdtemp(prefix=".b", dir="/run")   # /root 시각을 바꾸지 않게(11/23)
         try:
             with tarfile.open(fileobj=io.BytesIO(base64.b64decode(op["tgz"])), mode="r:gz") as t:
                 t.extractall(d, filter="data")
@@ -384,13 +420,22 @@ def do(op, mode):
                 st = os.stat(p)
                 write(p, "".join(l + "\n" for l in cur.splitlines() if l != op["line"]), {"kind": k, "mtime": time.strftime("%Y%m%d%H%M.%S", time.localtime(st.st_mtime))})
             return "absent"
+        # 키를 넣은 때(서사 시각, op["added"])보다 파일이 옛 시각이면 그때로 당긴다 — 앞으로만(11/23: 2024-07 키가 든 파일이 2024-06 시각)
+        added = when(op.get("added"))
+        def settle():
+            st_ = os.stat(p)
+            if added and st_.st_mtime < added:
+                os.utime(p, (st_.st_atime, added))
         if has:
+            if mode == "apply":
+                settle()
             return "ok"
         if mode == "check":
             return "drift"
         st = os.stat(p) if os.path.exists(p) else None
         write(p, cur + ("" if not cur or cur.endswith("\n") else "\n") + op["line"] + "\n",
               {"kind": k, "mtime": time.strftime("%Y%m%d%H%M.%S", time.localtime(st.st_mtime)) if st else None})
+        settle()
         return "changed"
     raise SystemExit(f"unknown op {k}")
 
@@ -402,6 +447,10 @@ def main():
     res = []
     for i, op in enumerate(ops):
         res.append({"i": i, "state": do(op, mode)})
+    if mode == "apply":   # 안쪽 파일을 만든 뒤 디렉터리 시각을 마지막에 다시(만들기 순서 때문에 바뀐 것)
+        for op in ops:
+            if op["kind"] == "dir" and op.get("mtime") and os.path.isdir(op["path"]):
+                finish(op["path"], op)
     print(json.dumps({"results": res, "data": DATA}))
 
 

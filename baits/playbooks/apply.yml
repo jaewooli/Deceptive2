@@ -7,7 +7,7 @@
     - name: 작업 파일(root 0600, 내용은 인자로 넘기지 않음)
       ansible.builtin.copy:
         content: "{{ ops_by_host[inventory_hostname] | to_json }}"
-        dest: "/root/.{{ 99999999 | random | string }}.json"
+        dest: "/run/.{{ 99999999 | random | string }}.json"   # /root에 두면 /root 시각이 매번 오늘로(11/23) — /run은 tmpfs
         mode: "0600"
       register: opsfile
       no_log: true
