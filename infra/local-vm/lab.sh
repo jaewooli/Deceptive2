@@ -79,8 +79,18 @@ EOF
 
 case "${1:-}" in
   up)
+    # VM끼리는 서로 기다릴 이유가 없다 → 동시에 켜고 모두 끝날 때까지 기다린다(11/23: 하나씩이면 5대 약 8분 → 2~3분)
+    # 출력은 VM별 임시 파일에 모았다가 순서대로 보여 준다(섞이지 않게). 하나라도 실패하면 0이 아닌 값으로 끝남
     shift; host_services
-    for r in $(pick "$@"); do env_for "$r"; echo "== $r ($VM_NAME, ${VM_MEM}MB)"; "$VM" up | tail -1; lan_and_proxy "$LAN_IP" "$LAN_GW" "$ROLE"; done ;;
+    out=$(mktemp -d); pids=()
+    for r in $(pick "$@"); do
+      ( env_for "$r"; { echo "== $r ($VM_NAME, ${VM_MEM}MB)"; "$VM" up | tail -1; lan_and_proxy "$LAN_IP" "$LAN_GW" "$ROLE"; } > "$out/$r" 2>&1 ) &
+      pids+=("$!:$r")
+    done
+    rc=0
+    for pr in "${pids[@]}"; do wait "${pr%%:*}" || { rc=1; echo "!! ${pr#*:} 실패" >> "$out/${pr#*:}"; }; done
+    for r in $(pick "$@"); do cat "$out/$r"; done
+    rm -rf "$out"; exit $rc ;;
   down)
     shift; for r in $(pick "$@"); do env_for "$r"; "$VM" down; echo "$r 꺼짐"; done ;;
   reboot)   # 랩 VM 재부팅은 이것으로만 — seed(HTTP)는 lab.sh가 켤 때만 제공된다. VM 안에서 systemctl reboot 하면 cloud-init이

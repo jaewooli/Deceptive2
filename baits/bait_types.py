@@ -240,6 +240,18 @@ while True:
         time.sleep(60)
 """
 
+    # Attivo 연결 테이블을 끈 상태: 꺼진 기능답게 쉬기만 한다(연결 없음)
+    IDLE = """#!/usr/bin/env python3
+# {feature} 사본 동기화 (2024-07). {flag}=false 이면 동기화는 쉰다.
+import logging, os, time
+logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
+log = logging.getLogger("{name}")
+while True:
+    if os.environ.get("{flag}", "false").lower() == "true":
+        log.info("sync start")
+    time.sleep(int(os.environ.get("SYNC_INTERVAL", "86400")))
+"""
+
     def match(self, ctx, host):
         out = []
         for svc in ctx["services"]:
@@ -259,16 +271,20 @@ while True:
         n = next((x for x in self.POOL if x not in used), f"sync_{secrets.token_hex(2)}")
         return {"kind": "db_user", "value": n, "password": pw()}
 
-    def ops(self, a, ident, dest):
+    def ops(self, a, ident, dest, crumbs=True, conn=True):
+        """crumbs = Illusive 맥락 미끼(T5: 환경변수의 미끼 DB 계정), conn = Attivo 연결 테이블(핸드셰이크만 한 연결). 벤더 기술 스위치(11/23)
+        둘 다 끄면 서비스 자체가 없음(엔진이 회수), crumbs만 끄면 계정 없는 URL로 연결만, conn만 끄면 연결 없이 대기"""
         made = ts(time.mktime((2024, 7, 8, 16, 20, 5, 0, 0, -1)))
-        url = f"{a['scheme']}://{ident['value']}:{ident['password']}@{DECOY}:5432/{a['db']}"
+        cred = f"{ident['value']}:{ident['password']}@" if crumbs else ""
+        url = f"{a['scheme']}://{cred}{DECOY}:5432/{a['db']}"
         unit = (f"[Unit]\nDescription={a['prefix'].lower()} copy sync\nAfter=network-online.target\n\n[Service]\nUser={a['user']}\n"
                 f"EnvironmentFile={a['env_file']}\nEnvironment=SYNC_DB_URL={url}\nEnvironment=SYNC_INTERVAL=86400\n"
                 f"ExecStart=/usr/bin/python3 /usr/local/bin/{a['name']}\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n")
-        script = self.SCRIPT.format(feature=a["prefix"].lower(), flag=a["flag"], name=a["name"])
+        script = (self.SCRIPT if conn else self.IDLE).format(feature=a["prefix"].lower(), flag=a["flag"], name=a["name"])
         return [{"kind": "file", "path": f"/usr/local/bin/{a['name']}", "content": script, "mode": "0755", "owner": "root", "group": "root", "mtime": made},
                 {"kind": "file", "path": f"/etc/systemd/system/{a['name']}.service", "content": unit, "mode": "0644", "owner": "root", "group": "root", "mtime": made},
-                {"kind": "unit", "name": f"{a['name']}.service", "mtime": made}]
+                {"kind": "unit", "name": f"{a['name']}.service", "mtime": made,
+                 "files": [f"/usr/local/bin/{a['name']}", f"/etc/systemd/system/{a['name']}.service"]}]
 
 
 # ------------------------------------------------------------------ 디코이 포트: 운영 서버(EDH)의 안 쓰는 포트 → farm 트랩(US10404747)

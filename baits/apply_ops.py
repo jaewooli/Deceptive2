@@ -164,10 +164,21 @@ def do(op, mode):
             subprocess.run(["systemctl", "disable", "--now", name], capture_output=True)
             subprocess.run(["systemctl", "daemon-reload"])
             return "absent"
-        if active and enabled:
+        # 파일(스크립트·유닛)을 서비스 시작 뒤에 바꿨으면 다시 시작 — 켜져 있다고 넘기면 옛 코드가 계속 돈다(11/23 Attivo 스위치가 안 먹던 원인).
+        # 판단은 ctime(mtime은 서사 시각으로 맞춰 둠). 서버에 상태 파일을 남기지 않는다
+        stale = False
+        if active and op.get("files"):
+            st = subprocess.run(["systemctl", "show", "-P", "ActiveEnterTimestamp", "--timestamp=unix", name], capture_output=True, text=True).stdout.strip()
+            started = float(st.lstrip("@") or 0)
+            stale = any(os.path.exists(f) and os.stat(f).st_ctime > started for f in op["files"])
+        if active and enabled and not stale:
             return "ok"
         if mode == "check":
             return "drift"
+        if stale:
+            subprocess.run(["systemctl", "daemon-reload"], check=True)
+            subprocess.run(["systemctl", "restart", name], check=True, capture_output=True)
+            return "changed"
         subprocess.run(["systemctl", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "enable", "--now", name], check=True, capture_output=True)
         link = f"/etc/systemd/system/multi-user.target.wants/{name}"
@@ -309,6 +320,26 @@ def do(op, mode):
                           "ports": [{"port": x} for x in want_ports]}
         else:
             w.pop("ports", None)
+        tmp = p + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.write(fd, json.dumps(cfg, ensure_ascii=False, indent=1).encode()); os.close(fd)
+        os.replace(tmp, p)
+        subprocess.run(["systemctl", "restart", "moa-notify"], check=True)
+        return "changed"
+    if k == "moa_watch":
+        # 공통 데몬 설정에서 감시 항목 하나를 켜고 끈다(벤더 기술 스위치 — 예: Attivo 페이로드 관문 gate). 다른 항목·웹훅은 그대로 → 다시 시작
+        # 끄면 데몬이 시작할 때 그 항목이 남긴 커널 규칙을 지운다(moa_notify teardown)
+        import subprocess
+        p = "/etc/moa-notify/config.json"
+        cfg = json.load(open(p))
+        w = cfg.get("watch", {}).get(op["watch"])
+        if w is None:
+            DATA["error"] = f"감시 항목 없음: {op['watch']}"
+            return "failed"
+        if bool(w.get("enabled", True)) == bool(op["enabled"]):
+            return "ok"
+        if mode == "check":
+            return "drift"
+        w["enabled"] = bool(op["enabled"])
         tmp = p + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.write(fd, json.dumps(cfg, ensure_ascii=False, indent=1).encode()); os.close(fd)
         os.replace(tmp, p)

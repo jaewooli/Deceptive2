@@ -11,6 +11,7 @@ local 규칙이 지워지면 서버 전체가 먹통이 된다. 둘 다 배포·
       {proj:<템플릿>:<필드>}   투영 디코이: name·ip·addr·mac·nic·gw (레지스트리의 active 배치)
       {trap:<서버>:tun|port}   그 서버의 트랩 중계(레지스트리): 팜 쪽 터널 이름·넘기는 포트
       {if:<서버>}              그 서버의 회사 LAN NIC 이름(맥락 — 로컬 enp0s3, AWS ens5)
+      {feat:<기술>} {nofeat:<기술>}  빈 문자열 — 그 벤더 기술 스위치가 켜져(꺼져) 있을 때만 채워짐 → 줄 하나를 켬/끔 상태에만 검사
       {farm} {sensor}          그 역할의 호스트 이름
   - 기대값은 같은 환경의 진짜 서버에서 그때 잰다: same / samehost
   - 접속 방법은 destinations.yml의 access(run·run_decoy)
@@ -62,6 +63,9 @@ def variables():
         if isinstance(d, dict) and "ip" in d and h not in ("farm",):
             v.setdefault(f"ip:{h}", d["ip"])
     reg = json.loads((OUT / "registry.json").read_text()) if (OUT / "registry.json").exists() else {"placements": {}}
+    feats = reg.get("features", {})
+    for name in ("breadcrumbs", "trap", "conntable", "projection"):   # 벤더 기술 스위치(engine.py FEATURES)
+        v[f"feat:{name}" if feats.get(name, "on") == "on" else f"nofeat:{name}"] = ""
     for p in reg["placements"].values():
         if p["type"] == "projection" and p["status"] == "active":
             a = p["anchor"]
@@ -81,7 +85,7 @@ def fill(s, v, regex=False):
         if k not in v:
             raise Missing(k)
         return re.escape(v[k]) if regex else v[k]
-    return re.sub(r"\{((?:ip|if|proj|trap):[^{}]+|farm|sensor)\}", sub, s)
+    return re.sub(r"\{((?:ip|if|proj|trap|feat|nofeat):[^{}]+|farm|sensor)\}", sub, s)
 
 
 def load(spec, v):

@@ -38,17 +38,17 @@ web-01 | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageFor
 {farm} | has | systemctl is-active guest@{proj:stg:name} | ^active$ | 팜: stg VM 동작
 {farm} | has | systemctl is-active guest@{proj:dev:name} | ^active$ | 팜: dev VM 동작
 # 터널 MTU = 구간 MTU(이웃 서버의 NIC MTU와 같아야 — 11/23 MSS·PMTU 단서)
-web-01 | same | cat /sys/class/net/{T}/mtu | ^(\d+)$ @ {if:web-01} ~ wg0 | web-01: 트랩 터널 MTU = LAN NIC MTU
+web-01 | same | cat /sys/class/net/{T}/mtu{feat:trap} | ^(\d+)$ @ {if:web-01} ~ wg0 | web-01: 트랩 터널 MTU = LAN NIC MTU
 
 # ---- 트랩 중계(Illusive): 공격자 → EDH 빈 포트 → (DNAT 169.254.200.1) wg0 → 팜 edhN → 트랩(EDH 주소), 응답은 같은 터널
-app-01 | route | 169.254.200.1 | wg0 | app-01(EDH): 트랩 중계 주소 → wg0
-app-01 | has | nft list table ip local_fwd | daddr {ip:app-01} tcp dport {trap:app-01:port} .*dnat to 169\.254\.200\.1 | app-01: 넘길 포트 → 중계 주소
-app-01 | has | iptables -t mangle -S LOCAL_FWD | -i wg0 -j TTL --ttl-inc 1 | app-01: 트랩 응답 TTL 보정(moa-notify)
-web-01 | route | 169.254.200.1 | wg0 | web-01(EDH): 트랩 중계 주소 → wg0
-web-01 | has | nft list table ip local_fwd | daddr {ip:web-01} tcp dport {trap:web-01:port} .*dnat to 169\.254\.200\.1 | web-01: 넘길 포트 → 중계 주소
-web-01 | has | iptables -t mangle -S LOCAL_FWD | -i wg0 -j TTL --ttl-inc 1 | web-01: 트랩 응답 TTL 보정(moa-notify)
+app-01 | route | 169.254.200.1{feat:trap} | wg0 | app-01(EDH): 트랩 중계 주소 → wg0
+app-01 | has | nft list table ip local_fwd{feat:trap} | daddr {ip:app-01} tcp dport {trap:app-01:port} .*dnat to 169\.254\.200\.1 | app-01: 넘길 포트 → 중계 주소
+app-01 | has | iptables -t mangle -S LOCAL_FWD{feat:trap} | -i wg0 -j TTL --ttl-inc 1 | app-01: 트랩 응답 TTL 보정(moa-notify)
+web-01 | route | 169.254.200.1{feat:trap} | wg0 | web-01(EDH): 트랩 중계 주소 → wg0
+web-01 | has | nft list table ip local_fwd{feat:trap} | daddr {ip:web-01} tcp dport {trap:web-01:port} .*dnat to 169\.254\.200\.1 | web-01: 넘길 포트 → 중계 주소
+web-01 | has | iptables -t mangle -S LOCAL_FWD{feat:trap} | -i wg0 -j TTL --ttl-inc 1 | web-01: 트랩 응답 TTL 보정(moa-notify)
 {farm} | route | {ip:app-01} from {ip:web-01} iif {trap:app-01:tun} | ve-trap-app-01 | 팜: app-01 트랩 터널 → 트랩
 {farm} | route | {ip:web-01} from {ip:app-01} iif ve-trap-app-01 | {trap:app-01:tun} | 팜: app-01 트랩 응답 → 같은 터널
 {farm} | route | {ip:web-01} from {ip:app-01} iif {trap:web-01:tun} | ve-trap-web-01 | 팜: web-01 트랩 터널 → 트랩
 {farm} | route | {ip:app-01} from {ip:web-01} iif ve-trap-web-01 | {trap:web-01:tun} | 팜: web-01 트랩 응답 → 같은 터널
-{farm} | has | iptables -t mangle -S PREROUTING | -i {trap:app-01:tun} -j TTL --ttl-inc 1 | 팜: app-01 트랩 터널 TTL 보정
+{farm} | has | iptables -t mangle -S PREROUTING{feat:trap} | -i {trap:app-01:tun} -j TTL --ttl-inc 1 | 팜: app-01 트랩 터널 TTL 보정

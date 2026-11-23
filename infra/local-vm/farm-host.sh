@@ -91,7 +91,7 @@ down() {
 
 check() {
   local s rc=0
-  for s in paths attacker inside lab; do echo "== $s"; "$CTL" "$ROOT/infra/checks/paths.py" "$ROOT/infra/checks/$s.spec" || rc=1; done
+  for s in paths attacker inside lab features; do echo "== $s"; "$CTL" "$ROOT/infra/checks/paths.py" "$ROOT/infra/checks/$s.spec" || rc=1; done
   return $rc
 }
 

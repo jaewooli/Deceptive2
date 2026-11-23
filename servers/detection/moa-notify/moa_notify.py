@@ -266,6 +266,22 @@ class ForwardedPorts:
             log.error("ip %s: %s", " ".join(args), r.stderr.strip())
         return r
 
+    @staticmethod
+    def teardown(cfg):
+        """트랩 중계를 끈(또는 설정에서 뺀) 채로 시작할 때: 예전에 건 DNAT·TTL 보정·터널 경로를 지운다 — 남기면 그 포트가 계속 터널로 간다
+        (11/23 Illusive 트랩 스위치를 끄며 확인). 운영 서버의 다른 규칙은 건드리지 않는다(자기 테이블·체인·경로만)"""
+        import subprocess
+        table, chain = cfg.get("table", "local_fwd"), cfg.get("ttl_chain", "LOCAL_FWD")
+        inner, tunnel = cfg.get("inner", "169.254.200.1"), cfg.get("tunnel", "wg0")
+        if subprocess.run(["/usr/sbin/nft", "list", "table", "ip", table], capture_output=True).returncode != 0:
+            return   # 우리가 만든 흔적이 없으면 아무것도 안 함(fail-safe)
+        subprocess.run(["/usr/sbin/nft", "delete", "table", "ip", table], capture_output=True)
+        ipt = lambda *a: subprocess.run(["/usr/sbin/iptables", "-w", "-t", "mangle", *a], capture_output=True)
+        while ipt("-D", "PREROUTING", "-j", chain).returncode == 0:
+            pass
+        ipt("-F", chain); ipt("-X", chain)
+        subprocess.run(["/usr/sbin/ip", "route", "del", f"{inner}/32", "dev", tunnel], capture_output=True)
+
     def route_ok(self):
         return f"dev {self.tunnel}" in self._ip("route", "show", f"{self.inner}/32").stdout
 
@@ -383,6 +399,22 @@ class PayloadGate:
         r = subprocess.run(["/usr/sbin/nft", "-f", "-"], input=text, text=True, capture_output=True)
         if r.returncode:
             log.error("nft gate: %s", r.stderr.strip())
+
+    @staticmethod
+    def teardown(cfg):
+        """관문을 끈 채로 시작할 때: 예전에 건 TPROXY·fwmark 규칙을 지운다. 남기면 PG(5432)로 오는 연결이
+        아무도 듣지 않는 관문 포트로 계속 돌려져 PG에 닿지 못한다(11/23 Attivo 스위치를 만들며 확인)"""
+        import subprocess
+        mark, rt = int(cfg.get("mark", 1)), int(cfg.get("table_id", 100))
+        # 우리가 만든 흔적이 있을 때만 — 없는 서버에서 경로표를 비우면 남의 경로를 지울 수 있다(fail-safe)
+        ours = subprocess.run(["/usr/sbin/nft", "list", "table", "ip", "local_gate"], capture_output=True).returncode == 0 or \
+            re.search(rf"fwmark 0x{mark:x} lookup {rt}\b", subprocess.run(["/usr/sbin/ip", "rule", "show"], capture_output=True, text=True).stdout)
+        if not ours:
+            return
+        subprocess.run(["/usr/sbin/nft", "delete", "table", "ip", "local_gate"], capture_output=True)
+        while subprocess.run(["/usr/sbin/ip", "rule", "del", "fwmark", str(mark), "lookup", str(rt)], capture_output=True).returncode == 0:
+            pass
+        subprocess.run(["/usr/sbin/ip", "route", "flush", "table", str(rt)], capture_output=True)
 
     def serve(self):
         import threading
@@ -545,8 +577,13 @@ def run(cfg, once=False):
     os.makedirs(os.path.dirname(state_path), exist_ok=True)
     state = load_state(state_path)
     watches = []
+    for name in set(WATCHERS) - set(cfg.get("watch", {})):   # 설정에서 빠진 감시가 남긴 커널 규칙도 정리
+        if hasattr(WATCHERS[name], "teardown"):
+            WATCHERS[name].teardown({})
     for name, wcfg in cfg.get("watch", {}).items():
         if not wcfg.get("enabled", True):
+            if hasattr(WATCHERS.get(name), "teardown"):   # 꺼진 감시가 남긴 커널 규칙 정리
+                WATCHERS[name].teardown(wcfg)
             continue
         watches.append((Follower(wcfg["path"], state, name) if wcfg.get("path") else None, WATCHERS[name](wcfg, host)))
     if not watches:

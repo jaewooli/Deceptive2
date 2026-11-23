@@ -146,3 +146,13 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - **투영 켜고 끄기 시험(11/23 통과)**: off → 센서 투영 목록 비고 relay 없음(센서·팜), 디코이 VM 0대, 공격자 자리에서 응답 없음, 트랩은 그대로 통과 / on → 같은 주소·같은 NIC MAC으로 되살아나 검사 4종 통과
 - **남은 일(순서)**: ③ 11/25 목적지 탐지: 팜 쪽 접속 경보(Acalvio — 디코이 밖 탐지, 특허 원문 확인함) + 기존 계획 ④ 웹훅 설정 통일(세 서버 값이 다름, 4절 7번) ⑤ 디코이 이후 업데이트 방식(unattended 켤지) — 사용자 결정 대기 ⑥ 11/28 AWS: aws.yml 채우기, EC2 모양·IMDS(local-aws-parity 4절), 팜 = metal 또는 C8i/M8i/R8i 중첩
 - 알려진 한계: 디코이 /proc/meminfo 4kB 차이, 디코이 감사 로그에 구축 당일 기록(진짜 서버는 회전), 진짜 랩 VM엔 옛 cloud-init 인스턴스 디렉터리가 여러 개(디코이는 하나), 디코이는 빌드 뒤 인터넷 없음
+
+## 13. 11/23 저녁 — 벤더 기술 스위치(사용자 원칙: 끄면 그 기술의 방식이 환경에서 전부 사라짐, 자체 설계는 항상 켬)
+- `python3 baits/engine.py feature <breadcrumbs|trap|conntable|projection> on|off`, `feature - status`
+  - breadcrumbs = Illusive 맥락 미끼 T1~T6 / trap = Illusive 트랩 서버(빈 포트 중계 + cache_hint) / conntable = Attivo 연결 테이블(report-sync의 핸드셰이크 연결 + db-backup-01 페이로드 관문) / projection = Acalvio 투영
+  - 항상 켬: db-backup-01(자체 설계 옛 백업 서버 디코이 — "실제 OS 디코이"는 특정 벤더 기술이 아님), moa-notify, 랩 장치
+  - report-sync는 두 기술을 싣는다: 미끼 계정(Illusive T5) + 연결(Attivo) — 4가지 조합(bait_types SyncService.ops crumbs·conn), 디코이 이름 풀이(hosts 줄)는 T1과 공유
+- 검사: `infra/checks/features.spec`({feat:X}/{nofeat:X} 자리표시자 — 켜면 있어야, 끄면 없어야), `farm-host.sh check`가 5종(paths·attacker·inside·lab·features)
+- 스위치마다 끄고 켜기 시험 통과(11/23). 고친 결함: moa-notify가 끈 감시(관문·트랩 중계)의 커널 규칙을 남김 → 시작 때 정리(우리 흔적이 있을 때만 — fail-safe), 엔진 unit 작업이 파일을 바꿔도 재시작 안 함 → ctime 비교로 재시작
+- `lab.sh up`은 VM을 동시에 켬(하나씩 → 동시, 출력은 VM 순서대로)
+- WSL이 저녁에 재시작됨(원인 Windows 쪽) → 설계대로 디스크·레지스트리만 남고 깨끗이 내려감 → `lab.sh up all` + `farm-host.sh up`으로 복구, 검사 통과

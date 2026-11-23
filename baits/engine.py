@@ -110,7 +110,7 @@ def constraints():
 def plan(r, ctxs):
     deny = constraints()
     active = {p["anchor_key"]: pid for pid, p in r["placements"].items() if p["status"] in ("active", "paused")}   # paused = 기능 꺼 둠(자리 유지)
-    off = {FEATURES[n][1] for n, st in r.get("features", {}).items() if st == "off"}
+    off = off_types(r)
     used = {p["ident"]["value"] for p in r["placements"].values()}
     new, seen = [], set()
     live_ports = [{"host": p["host"], "service": p["anchor"]["service"], "port": p["anchor"]["port"]}
@@ -445,77 +445,174 @@ ip rule del pref {60 + n} 2>/dev/null; ip rule del pref {161 + n} 2>/dev/null; s
 
 # ------------------------------------------------------------------ 기능 켜고 끄기(벤더 기술 단위, 11/23 사용자 요청)
 # 끔 = 네트워크에서 그 기능이 없던 상태(경로·규칙·터널·ARP 응답 제거, 디코이는 멈춤 — 디스크·키는 남김). 켬 = 같은 자리·같은 ID로 되살림
-FEATURES = {"projection": ("Acalvio 투영(센서 → 팜 디코이 VM)", "projection"), "trap": ("Illusive 트랩 서버 중계(EDH 빈 포트 → 팜 트랩)", "decoy_port")}
+FEATURES = {   # 스위치 = 시중 벤더 기술 단위(11/23 사용자: 끄면 그 기술의 방식이 환경에서 전부 사라져야, 자체 설계는 끄지 않음)
+    "breadcrumbs": ("Illusive 맥락 기반 미끼(T1~T6, US10382483)",
+                    ["env_db_url", "ssh_config", "history", "agent_session", "aws_profile", "sync_service"]),
+    "trap": ("Illusive 트랩 서버 중계(빈 포트 → 팜 트랩 + 활성 트랩만 가리키는 cache_hint, US10404747)", ["decoy_port", "cache_hint"]),
+    "conntable": ("Attivo 연결 테이블 미끼(핸드셰이크만 한 연결 + 디코이 페이로드 관문, US10375110)", []),
+    "projection": ("Acalvio 투영(센서 → 팜 디코이 VM)", ["projection"]),
+}
+# 항상 켜 둠(자체 설계 — 특정 벤더 기술이 아님): db-backup-01 옛 백업 서버 디코이, moa-notify, 랩 장치·검사 도구
 
 
-def feature_off(r, name):
-    d = dests()
-    typ = FEATURES[name][1]
-    live = [(pid, p) for pid, p in r["placements"].items() if p["type"] == typ and p["status"] == "active"]
-    if name == "projection":
-        for pid, p in live:
-            a = p["anchor"]
-            one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"systemctl stop guest@{a['name']} 2>/dev/null; true\n"}])
-            one(d["sensor"]["host"], [{"kind": "run", "script": (SRV / "hosts/sensor/install.sh").read_text(), "argv": ["remove", a["addr"].split("/")[0]]}])
-            p["status"] = "paused"; event(r, "paused", pid); save_reg(r)
-        for h in (d["sensor"]["host"], d["farm"]["host"]):   # relay는 투영 전용 터널
-            one(h, [{"kind": "run", "argv": [], "script": "systemctl disable --now wg-quick@relay >/dev/null 2>&1; true\n"}])
-    else:
-        hosts = sorted({p["host"] for _, p in live})
-        for pid, p in live:
-            p["status"] = "paused"; event(r, "paused", pid); save_reg(r)
-        for h in hosts:
-            a = next(p["anchor"] for _, p in live if p["host"] == h)
-            n = r.get("farm_slots", {}).get(h)
-            one(h, [{"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": []},
-                    {"kind": "run", "argv": [], "script": "systemctl disable --now wg-quick@wg0 >/dev/null 2>&1; true\n"}])
-            one(d["farm"]["host"], [{"kind": "run", "argv": [], "script":
-                f"systemctl disable --now systemd-nspawn@trap-{h} wg-quick@edh{n} >/dev/null 2>&1; true\n"}])
-    r.setdefault("features", {})[name] = "off"; save_reg(r)
+def feature_state(r, name):
+    return r.get("features", {}).get(name, "on")
 
 
-def feature_on(r, name):
-    d = dests()
-    typ = FEATURES[name][1]
-    paused = [(pid, p) for pid, p in r["placements"].items() if p["type"] == typ and p["status"] == "paused"]
-    persist = str(d["farm"].get("persist", True)).lower()
-    if name == "projection":
-        for h, en in ((d["farm"]["host"], persist == "true"), (d["sensor"]["host"], True)):
-            one(h, [{"kind": "run", "argv": [], "script": f"{'systemctl enable wg-quick@relay >/dev/null 2>&1; ' if en else ''}systemctl start wg-quick@relay\n"}])
-        for pid, p in paused:
-            a = p["anchor"]
-            _, sd = one(d["sensor"]["host"], [{"kind": "run", "script": (SRV / "hosts/sensor/install.sh").read_text(),
-                                               "argv": ["add", p["nic"], a["addr"], a["gw"]], "collect": ["projection_mac"]}])
-            if sd.get("projection_mac") != p["mac"]:
-                raise SystemExit(f"{a['name']}: 센서 NIC MAC이 바뀜({p['mac']} → {sd.get('projection_mac')}) — 디코이 NIC MAC과 어긋나 ARP에서 드러남")
-            one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"systemctl start guest@{a['name']}\n"}])
-            p["status"] = "active"; event(r, "resumed", pid); save_reg(r)
-    else:
-        for pid, p in paused:
-            p["status"] = "active"
-        for h in sorted({p["host"] for _, p in paused}):
-            a = next(p["anchor"] for _, p in paused if p["host"] == h)
-            n = r.get("farm_slots", {}).get(h)
-            one(d["farm"]["host"], [{"kind": "run", "argv": [], "script":
-                f"{'systemctl enable wg-quick@edh%s systemd-nspawn@trap-%s >/dev/null 2>&1; ' % (n, h) if persist == 'true' else ''}"
-                f"systemctl start wg-quick@edh{n} systemd-nspawn@trap-{h}\n"}])
-            one(h, [{"kind": "run", "argv": [], "script": "systemctl enable --now wg-quick@wg0 >/dev/null 2>&1\n"},
-                    {"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": edh_ports(r, h)}])
-        for pid, p in paused:
-            event(r, "resumed", pid)
+def off_types(r):
+    return {t for n, (_, ts) in FEATURES.items() if feature_state(r, n) == "off" for t in ts}
+
+
+def _pause(r, pid):
+    r["placements"][pid]["status"] = "paused"; event(r, "paused", pid); save_reg(r)
+
+
+def _resume(r, pid):
+    r["placements"][pid]["status"] = "active"; event(r, "resumed", pid); save_reg(r)
+
+
+def sync_refresh(r):
+    """report-sync(T5)는 두 기술을 싣는다: 미끼 계정(Illusive 맥락 미끼) + 핸드셰이크만 한 연결(Attivo). 두 스위치 상태대로 다시 만든다"""
+    crumbs, conn = feature_state(r, "breadcrumbs") == "on", feature_state(r, "conntable") == "on"
+    for pid, p in r["placements"].items():
+        if p["type"] != "sync_service" or p["status"] not in ("active", "paused"):
+            continue
+        if not crumbs and not conn:
+            if p["status"] == "active":
+                run_ops([(pid, p)], "absent"); _pause(r, pid)
+            continue
+        p["ops"] = T.TYPES["sync_service"].ops(p["anchor"], p["ident"], dests()[T.DECOY], crumbs=crumbs, conn=conn)
+        # 디코이 이름 풀이(/etc/hosts 줄)는 T1 미끼가 넣는다 — Illusive를 꺼도 Attivo 연결은 이름을 풀어야 하므로 같은 줄을 함께 갖는다
+        # (같은 서버 T1 배치의 작업을 그대로 — 조건을 새로 짐작하지 않음, 11/23 미끼만 끄면 연결이 안 되던 원인)
+        hosts_ops = [op for q in r["placements"].values() if q["type"] == "env_db_url" and q["host"] == p["host"]
+                     and q["status"] in ("active", "paused") for op in q["ops"] if op.get("path") == "/etc/hosts"]
+        p["ops"] += hosts_ops[:1]
+        if hosts_ops:   # hosts 줄이 바뀌면(미끼를 끄고 켜는 사이) 바로 다시 연결하게 — 안 그러면 이름 풀이 실패 뒤 60초 쉼
+            for op in p["ops"]:
+                if op["kind"] == "unit":
+                    op["files"] = op.get("files", []) + ["/etc/hosts"]
+        run_ops([(pid, p)], "apply")
+        if p["status"] != "active":
+            _resume(r, pid)
         save_reg(r)
-    r.setdefault("features", {})[name] = "on"; save_reg(r)
+
+
+def gate_apply(r):
+    """Attivo 페이로드 관문: 디코이 moa-notify의 gate 감시를 켜고 끈다(끄면 데몬이 TPROXY 규칙을 지움 — moa_notify teardown)"""
+    on = feature_state(r, "conntable") == "on"
+    for h in inventory().get("decoys", []):
+        one(h, [{"kind": "moa_watch", "watch": "gate", "enabled": on}])
+
+
+def projection_off(r):
+    d = dests()
+    for pid, p in [(k, v) for k, v in r["placements"].items() if v["type"] == "projection" and v["status"] == "active"]:
+        a = p["anchor"]
+        one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"systemctl stop guest@{a['name']} 2>/dev/null; true\n"}])
+        one(d["sensor"]["host"], [{"kind": "run", "script": (SRV / "hosts/sensor/install.sh").read_text(), "argv": ["remove", a["addr"].split("/")[0]]}])
+        _pause(r, pid)
+    for h in (d["sensor"]["host"], d["farm"]["host"]):   # relay는 투영 전용 터널
+        one(h, [{"kind": "run", "argv": [], "script": "systemctl disable --now wg-quick@relay >/dev/null 2>&1; true\n"}])
+
+
+def projection_on(r):
+    d = dests()
+    persist = str(d["farm"].get("persist", True)).lower() == "true"
+    for h, en in ((d["farm"]["host"], persist), (d["sensor"]["host"], True)):
+        one(h, [{"kind": "run", "argv": [], "script": f"{'systemctl enable wg-quick@relay >/dev/null 2>&1; ' if en else ''}systemctl start wg-quick@relay\n"}])
+    for pid, p in [(k, v) for k, v in r["placements"].items() if v["type"] == "projection" and v["status"] == "paused"]:
+        a = p["anchor"]
+        _, sd = one(d["sensor"]["host"], [{"kind": "run", "script": (SRV / "hosts/sensor/install.sh").read_text(),
+                                           "argv": ["add", p["nic"], a["addr"], a["gw"]], "collect": ["projection_mac"]}])
+        if sd.get("projection_mac") != p["mac"]:
+            raise SystemExit(f"{a['name']}: 센서 NIC MAC이 바뀜({p['mac']} → {sd.get('projection_mac')}) — 디코이 NIC MAC과 어긋나 ARP에서 드러남")
+        one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"systemctl start guest@{a['name']}\n"}])
+        _resume(r, pid)
+
+
+def trap_off(r):
+    d = dests()
+    ports = [(k, v) for k, v in r["placements"].items() if v["type"] == "decoy_port" and v["status"] == "active"]
+    hints = [(k, v) for k, v in r["placements"].items() if v["type"] == "cache_hint" and v["status"] == "active"]
+    if hints:
+        run_ops(hints, "absent")
+        for pid, _ in hints:
+            _pause(r, pid)
+    for h in sorted({p["host"] for _, p in ports}):
+        a = next(p["anchor"] for _, p in ports if p["host"] == h)
+        n = r.get("farm_slots", {}).get(h)
+        one(h, [{"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": []},
+                {"kind": "run", "argv": [], "script": "systemctl disable --now wg-quick@wg0 >/dev/null 2>&1; true\n"}])
+        one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"systemctl disable --now systemd-nspawn@trap-{h} wg-quick@edh{n} >/dev/null 2>&1; true\n"}])
+    for pid, _ in ports:
+        _pause(r, pid)
+
+
+def trap_on(r):
+    d = dests()
+    persist = str(d["farm"].get("persist", True)).lower() == "true"
+    ports = [(k, v) for k, v in r["placements"].items() if v["type"] == "decoy_port" and v["status"] == "paused"]
+    for pid, _ in ports:
+        r["placements"][pid]["status"] = "active"
+    for h in sorted({p["host"] for _, p in ports}):
+        a = next(p["anchor"] for _, p in ports if p["host"] == h)
+        n = r.get("farm_slots", {}).get(h)
+        one(d["farm"]["host"], [{"kind": "run", "argv": [], "script":
+            f"{'systemctl enable wg-quick@edh%s systemd-nspawn@trap-%s >/dev/null 2>&1; ' % (n, h) if persist else ''}"
+            f"systemctl start wg-quick@edh{n} systemd-nspawn@trap-{h}\n"}])
+        one(h, [{"kind": "run", "argv": [], "script": "systemctl enable --now wg-quick@wg0 >/dev/null 2>&1\n"},
+                {"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": edh_ports(r, h)}])
+    for pid, _ in ports:
+        _resume(r, pid)
+    hints = [(k, v) for k, v in r["placements"].items() if v["type"] == "cache_hint" and v["status"] == "paused"]
+    if hints:
+        run_ops(hints, "apply")
+        for pid, _ in hints:
+            _resume(r, pid)
+
+
+def breadcrumbs_off(r):
+    live = [(k, v) for k, v in r["placements"].items() if v["type"] in FEATURES["breadcrumbs"][1] and v["type"] != "sync_service"
+            and v["status"] == "active"]
+    if live:
+        run_ops(live, "absent")
+        for pid, _ in live:
+            _pause(r, pid)
+
+
+def breadcrumbs_on(r):
+    paused = [(k, v) for k, v in r["placements"].items() if v["type"] in FEATURES["breadcrumbs"][1] and v["type"] != "sync_service"
+              and v["status"] == "paused"]
+    if paused:
+        run_ops(paused, "apply")
+        for pid, _ in paused:
+            _resume(r, pid)
+
+
+def feature_set(r, name, state):
+    r.setdefault("features", {})[name] = state
+    save_reg(r)
+    if name == "projection":
+        (projection_on if state == "on" else projection_off)(r)
+    elif name == "trap":
+        (trap_on if state == "on" else trap_off)(r)
+    elif name == "breadcrumbs":
+        (breadcrumbs_on if state == "on" else breadcrumbs_off)(r)
+        sync_refresh(r)
+    elif name == "conntable":
+        sync_refresh(r)
+        gate_apply(r)
 
 
 def cmd_feature(a):
     r = load_reg()
     if a.state == "status":
-        for n, (desc, typ) in FEATURES.items():
-            ps = [p for p in r["placements"].values() if p["type"] == typ and p["status"] in ("active", "paused")]
-            print(f"{n:11} {r.get('features', {}).get(n, 'on'):3}  {desc} — 배치 {len(ps)}개"
+        for n, (desc, types) in FEATURES.items():
+            ps = [p for p in r["placements"].values() if p["type"] in types and p["status"] in ("active", "paused")]
+            print(f"{n:11} {feature_state(r, n):3}  {desc} — 배치 {len(ps)}개"
                   f" ({', '.join(sorted({p['status'] for p in ps})) or '-'})")
         return
-    (feature_on if a.state == "on" else feature_off)(r, a.name)
+    feature_set(r, a.name, a.state)
     print(f"{a.name} {a.state}")
 
 
