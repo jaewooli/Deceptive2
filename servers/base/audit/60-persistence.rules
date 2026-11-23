@@ -1,0 +1,4 @@
+## 지속성 경로 변경 — 공유 라이브러리 강제 로드, 시스템·사용자 cron
+-a always,exit -F path=/etc/ld.so.preload -F perm=wa -F key=persistence
+-a always,exit -F dir=/etc/cron.d -F perm=wa -F key=persistence
+-a always,exit -F dir=/var/spool/cron/crontabs -F perm=wa -F key=persistence

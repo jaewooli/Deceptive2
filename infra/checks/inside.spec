@@ -23,7 +23,8 @@
 {proj:stg:ip} ~ app-01 | samehost | cat /etc/cloud/build.info | serial: (\S+) | stg 출발 이미지 serial = app-01
 {proj:stg:ip} ~ app-01 | samehost | md5sum /etc/apt/sources.list.d/ubuntu.sources | ^([0-9a-f]{32}) | stg 저장소 파일 = app-01(빌드용 Snapshot 흔적 없음, cloud-init 템플릿과 이미지 원본이 같은가)
 {proj:stg:ip} ~ app-01 | samehost | ls /boot/vmlinuz-* | (?s)(/boot/vmlinuz-.*\S) | stg 설치된 커널 목록 = app-01
-{proj:stg:ip} ~ app-01 | samehost | auditctl -l|md5sum | ^([0-9a-f]{32}) | stg 감사 규칙 전체 = app-01(빌드 로그의 "line 23 오류"가 진짜 서버와 같은 결과인가)
+{proj:stg:ip} ~ app-01 | samehost | auditctl -l|grep -v -e secret-files -e /.ssh|md5sum | ^([0-9a-f]{32}) | stg 공통 감사 규칙 = app-01(계정별 규칙 제외 — 계정이 서버마다 다름, 11/26)
+{proj:stg:ip} | has | auditctl -l | -w /root/.ssh/authorized_keys -p wa -k persistence | stg 계정·자격증명 파일 규칙이 이 디코이 계정으로 올라감(auditctl -l은 path·dir 규칙을 -w 형식으로 보여 줌, 11/26)
 {proj:stg:ip} ~ app-01 | samehost | systemctl is-active moa-notify | ^(\S+)$ | stg 경보 데몬(moa-notify) = app-01(세 서버 공통 — 디코이에만 없으면 단서이자 탐지 공백, 11/23)
 {proj:stg:ip} ~ web-01 | samehost | free -m | ^Mem:\s+(\d+) | stg 메모리(free -m) = 같은 구간 진짜 서버(web-01). /proc/meminfo는 4kB 차이(NIC 수 등 하드웨어 차이 — 기록, 11/23)
 # dev-01(int 구간 — 이웃 app-01)
@@ -36,8 +37,15 @@
 {proj:dev:ip} ~ app-01 | samehost | cat /etc/cloud/build.info | serial: (\S+) | dev 출발 이미지 serial = app-01
 {proj:dev:ip} ~ app-01 | samehost | free -m | ^Mem:\s+(\d+) | dev 메모리(free -m) = app-01
 {proj:dev:ip} ~ app-01 | samehost | systemctl is-active moa-notify | ^(\S+)$ | dev 경보 데몬 = app-01
-{proj:dev:ip} ~ app-01 | samehost | auditctl -l|md5sum | ^([0-9a-f]{32}) | dev 감사 규칙 전체 = app-01
+{proj:dev:ip} ~ app-01 | samehost | auditctl -l|grep -v -e secret-files -e /.ssh|md5sum | ^([0-9a-f]{32}) | dev 공통 감사 규칙 = app-01(계정별 규칙 제외 — 계정이 서버마다 다름, 11/26)
+{proj:dev:ip} | has | auditctl -l | -w /root/.ssh/authorized_keys -p wa -k persistence | dev 계정·자격증명 파일 규칙이 이 디코이 계정으로 올라감(auditctl -l은 path·dir 규칙을 -w 형식으로 보여 줌, 11/26)
 {proj:dev:ip} | has | ip -o link show {if:app-01} | link/ether {proj:dev:mac} | dev NIC 이름 = app-01, MAC = 이웃 ARP 값
 {proj:dev:ip} | has | hostname | ^{proj:dev:name}$ | dev hostname
 {proj:dev:ip} | hasnt | cat /var/lib/cloud/instance/user-data.txt | runcmd|base\.tgz|power_state|build\.sh | dev user-data에 빌드 내용 없음
 {proj:dev:ip} | has | systemctl is-active postgresql | ^active$ | dev 개발 DB(PG)
+# 서버에 남은 파일에 프로젝트 용어가 없는가(11/23: moa-notify 주석·wg0.conf 주석·web-01 홈의 저장소 사본에서 발견). 자기 hostname만 든 줄은 제외 — 로컬 랩 VM 이름(lt-decoy)은 HANDOFF 16절 열린 문제
+web-01 | hasnt | grep -rIHnE "미끼|디코이|트랩|투영|허니|Illusive|Attivo|Acalvio|[Dd]ecoy|[Hh]oneypot|[Dd]eceptive|[Bb]readcrumb" /etc /opt /srv /home /root /backup /var/lib/postgresql /usr/local 2>/dev/null|grep -vF "$(hostname)"|cut -c1-120 | . | web-01 남은 파일에 프로젝트 용어 없음
+app-01 | hasnt | grep -rIHnE "미끼|디코이|트랩|투영|허니|Illusive|Attivo|Acalvio|[Dd]ecoy|[Hh]oneypot|[Dd]eceptive|[Bb]readcrumb" /etc /opt /srv /home /root /backup /var/lib/postgresql /usr/local 2>/dev/null|grep -vF "$(hostname)"|cut -c1-120 | . | app-01 남은 파일에 프로젝트 용어 없음
+db-backup-01 | hasnt | grep -rIHnE "미끼|디코이|트랩|투영|허니|Illusive|Attivo|Acalvio|[Dd]ecoy|[Hh]oneypot|[Dd]eceptive|[Bb]readcrumb" /etc /opt /srv /home /root /backup /var/lib/postgresql /usr/local 2>/dev/null|grep -vF "$(hostname)"|cut -c1-120 | . | db-backup-01 남은 파일에 프로젝트 용어 없음
+{proj:stg:ip} | hasnt | grep -rIHnE "미끼|디코이|트랩|투영|허니|Illusive|Attivo|Acalvio|[Dd]ecoy|[Hh]oneypot|[Dd]eceptive|[Bb]readcrumb" /etc /opt /srv /home /root /backup /var/lib/postgresql /usr/local 2>/dev/null|grep -vF "$(hostname)"|cut -c1-120 | . | stg 남은 파일에 프로젝트 용어 없음
+{proj:dev:ip} | hasnt | grep -rIHnE "미끼|디코이|트랩|투영|허니|Illusive|Attivo|Acalvio|[Dd]ecoy|[Hh]oneypot|[Dd]eceptive|[Bb]readcrumb" /etc /opt /srv /home /root /backup /var/lib/postgresql /usr/local 2>/dev/null|grep -vF "$(hostname)"|cut -c1-120 | . | dev 남은 파일에 프로젝트 용어 없음

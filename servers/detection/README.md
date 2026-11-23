@@ -1,7 +1,7 @@
 # servers/detection — 호스트 쪽 탐지 룰 (서버 안에 설치)
 
-- 결과 기반 감시 P0: `authorized_keys`, `/etc/ld.so.preload`, `/etc/cron.d` auditd 감시 — 11/26
-- 미끼 열람 감시: app-01 `~/.aws/credentials`(T6 1차, 60초) — 11/26
+- 결과 기반 감시 P0: `authorized_keys`, `/etc/ld.so.preload`, `/etc/cron.d`(+ 사용자 crontab) auditd 감시 — ✅ 11/23(규칙은 `servers/base/audit/`, 경보는 moa-notify `audit`)
+- 미끼 열람 감시: 자격증명 위치 일반 규칙(`~/.ssh`·`~/.aws`·서비스 환경 파일) — T1·T2·T6 1차 ✅ 11/23, 0.6~0.9초
 - db-backup-01 목적지 탐지: sshd 로그인(미끼 키 지문 A·B, T2·T4), DB 5432 접속(`report_ro`·`sync_svc`, T1·T5) — 11/25
 - 디코이 세션 명령 기록(execve, 미끼 계정 auid) — 11/27
 - 경보 송신(웹훅 URL은 배포 시 주입) — 11/27
@@ -10,7 +10,7 @@
 - `moa-notify/`: Python 표준 라이브러리만, `/opt/moa-notify` + `moa-notify.service`, 설정 `/etc/moa-notify/config.json`(root 0600, 서버마다 켜는 감시 항목만 다름, 저장소에는 `config.example.json`만)
 - **서버에 올라가는 코드라 이름·주석에 프로젝트 용어를 쓰지 않는다**(`servers/webapp/`과 같은 규칙)
 - 지금 있는 감시: `postgresql` — PG 서버 로그에서 접속 하나를 알림 하나로 묶음(접속 출처, 사용자, DB, 결과). **모든 접속**에 알림, 미끼 계정 이름 목록 없음(11/20 결정). T1/T5 대응은 루트 `detection/`에서
-- 다음: sshd(키 지문 A·B, 11/25), auditd(T6 열람, 11/26)
+- `sshd`(디코이만 켬, 11/23), `audit`(모든 서버, 11/23 — `secret-files`·`persistence` 키, 프로세스·부모·auid·명령줄 포함), `ports`·`gate`(트랩·관문), `projection`(팜)
 - 테스트: `python3 -m unittest discover -s servers/detection/moa-notify/tests` (서버에 올리지 않음). `tests/fixtures/`는 로컬 VM의 실제 PG16 로그
 
 ### 로컬 VM에서 확인한 것 (11/20)

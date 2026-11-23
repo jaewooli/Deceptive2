@@ -3,6 +3,7 @@
 web-01·app-01·db-backup-01에 **같은 파일 한 벌**을 배포한다. 호스트별 사본을 만들지 않는다.
 어긋난 사본이 곧 "디코이 전용 감시 흔적"(T1518.001 단서)이 되기 때문.
 
+- `install.sh audit`: audit 규칙만 다시(계정·서비스가 바뀐 뒤). 끝에 `audit/check.sh`
 - `install.sh base`: 시간대 Asia/Seoul, auditd·clamav(clamd 없음, freshclam + 매일 전체 검사 cron)·unattended-upgrades·logrotate·cron, audit 규칙
 - `clamav/`(11/21): `/etc/cron.d/clamav-scan` 매일 03:17 `clamscan -r -i /`(nice 19·ionice idle, 감염 파일만 `/var/log/clamav/clamscan.log`) + logrotate(주 1회, 4주). 백신을 깔아 두고 검사를 안 하는 서버는 앞뒤가 안 맞음. 이 검사가 매일 미끼 파일을 열므로 기준선의 실제 오탐원이 됨. 1GiB에서 OOM → web·app t3.small
 - `install.sh postgresql`: PG가 있는 서버(app-01, db-backup-01)에서 같은 PG 설정 — `postgresql/50-logging.conf`(접속·종료 기록, CIS PostgreSQL Benchmark 권고), `50-listen.conf` + `pg_hba` 내부망(10.0.0.0/16, scram-sha-256)
@@ -20,6 +21,8 @@ web-01·app-01·db-backup-01에 **같은 파일 한 벌**을 배포한다. 호�
 | `30-stig.rules` | 같은 예제 | "보안 가이드를 따라 켜 둔 회사" 모습 |
 | `43-module-load.rules` | 같은 예제 | 커널 모듈 적재 |
 | `50-user-cmd.rules` | 이 저장소 | 로그인 세션 명령(execve, `auid!=unset`). 디코이 세션 명령 첨부(plan-wbs 77행)를 디코이 전용 규칙 없이 |
+| `60-persistence.rules` | 이 저장소(11/23, 원래 11/26) | 결과 기반 감시 P0: `/etc/ld.so.preload`, `/etc/cron.d`, 사용자 crontab(`/var/spool/cron/crontabs`, 사용자 추가) 쓰기·속성 변경 → `persistence` |
+| `61-account-files.rules` | `audit/account-rules.sh`가 이 서버에서 생성 | 로그인 셸 계정의 `~/.ssh`·`~/.aws` 안 파일 열람·서비스 필수 `EnvironmentFile` 열람 → `secret-files`, `authorized_keys(2)`·`~/.ssh` 만들기 → `persistence`. 미끼만 지목하지 않는 일반 규칙(미끼별 규칙은 `auditctl -l`로 미끼 위치가 드러남). 계정·서비스가 바뀌면 `install.sh audit` 다시 |
 
 - **`audit/check.sh`**: 올라간 규칙 수(`auditctl -l`)가 `rules.d`의 규칙 줄 수와 같은지 검사. 서버에 없는 디렉터리를 대상으로 한 규칙(`-F dir=…`, 지금은 `/etc/NetworkManager/` 1줄)만 빼고 센다. `12-ignore-error` 때문에 다른 로드 오류가 조용히 넘어가는 것을 막으려는 것. `install.sh`가 로드 직후 실행하고, 다르면 설치 실패(VM: 기대 41 = 실제 41, 틀린 규칙을 넣으면 실패 확인)
 - 예제 파일은 서버에 설치된 auditd 패키지에서 바로 복사한다(저장소에 사본 없음 → 패키지 버전과 어긋나지 않음)

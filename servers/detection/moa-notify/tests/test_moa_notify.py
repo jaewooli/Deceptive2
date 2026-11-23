@@ -239,7 +239,7 @@ class ProjectionInTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         open(os.path.join(self.d, "stg-01.env"), "w").write("ADDR=10.0.21.12/24\nMEM=1024\n")
-        self.w = mn.ProjectionIn({"guest_env_dir": self.d}, "farm")
+        self.w = mn.TunnelIn({"guest_env_dir": self.d, "prefix": "PROJ-IN"}, "farm")
 
     def test_tcp_new_connection_names_decoy(self):
         ev = self.w.feed("2026-11-23T21:30:00.000+09:00 farm kernel: PROJ-IN IN=relay OUT=ve-stg-01 SRC=10.0.21.11 DST=10.0.21.12 "
@@ -258,3 +258,66 @@ class ProjectionInTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def audit_ev(serial, key, syscall, comm, exe, paths, cwd="/root", pid=4242, auid="ubuntu", success="yes"):
+    ts = "1795439495.856"
+    out = [f'type=SYSCALL msg=audit({ts}:{serial}): arch=c000003e syscall={syscall} success={success} exit=3 items={len(paths)} '
+           f'ppid=100 pid={pid} auid=1000 uid=0 gid=0 ses=7 comm="{comm}" exe="{exe}" key="{key}"\x1dAUID="{auid}" UID="root"',
+           f'type=CWD msg=audit({ts}:{serial}): cwd="{cwd}"']
+    for i, (name, nametype, mode) in enumerate(paths):
+        out.append(f'type=PATH msg=audit({ts}:{serial}): item={i} name="{name}" inode=1 dev=fd:01 mode={mode} ouid=0 ogid=0 nametype={nametype}')
+    out.append(f"type=PROCTITLE msg=audit({ts}:{serial}): proctitle=" + f"{comm}\x00x".encode().hex())
+    return out
+
+
+class AuditFilesTest(unittest.TestCase):
+    def setUp(self):
+        self.w = mn.AuditFiles({}, "app-01")
+
+    def test_credentials_read_alerts_with_process(self):
+        ev = feed_all(self.w, audit_ev(1, "secret-files", 257, "cat", "/usr/bin/cat",
+                                       [("/var/lib/postgresql/.aws/credentials", "NORMAL", "0100600")]))
+        self.assertEqual(len(ev), 1)
+        self.assertIn("자격증명 파일 열람", ev[0]["result"])
+        self.assertIn("/var/lib/postgresql/.aws/credentials", ev[0]["result"])
+        self.assertEqual(ev[0]["audit"]["auid"], "ubuntu")
+        self.assertEqual(ev[0]["audit"]["cmd"], "cat x")
+
+    def test_relative_name_resolved_with_cwd(self):
+        ev = feed_all(self.w, audit_ev(2, "secret-files", 257, "less", "/usr/bin/less", [("config", "NORMAL", "0100644")],
+                                       cwd="/home/deploy/.ssh"))
+        self.assertEqual(ev[0]["audit"]["paths"], ["/home/deploy/.ssh/config"])
+
+    def test_directory_listing_and_sshd_and_auditctl_ignored(self):
+        ev = feed_all(self.w, audit_ev(3, "secret-files", 257, "ls", "/usr/bin/ls", [("/root/.ssh", "NORMAL", "040700")])
+                      + audit_ev(4, "secret-files", 257, "sshd", "/usr/sbin/sshd", [("/backup/.ssh/authorized_keys", "NORMAL", "0100600")])
+                      + audit_ev(5, "persistence", 44, "auditctl", "/usr/sbin/auditctl", [("/etc/", "PARENT", "040755")]))
+        self.assertEqual(ev, [])
+
+    def test_same_process_same_file_once(self):
+        ev = feed_all(self.w, audit_ev(6, "secret-files", 257, "aws", "/usr/bin/python3", [("/root/.aws/credentials", "NORMAL", "0100600")])
+                      + audit_ev(7, "secret-files", 257, "aws", "/usr/bin/python3", [("/root/.aws/credentials", "NORMAL", "0100600")]))
+        self.assertEqual(len(ev), 1)
+
+    def test_authorized_keys_rename_and_preload_create(self):
+        ev = feed_all(self.w, audit_ev(8, "persistence", 316, "mv", "/usr/bin/mv",
+                                       [("/root/.ssh/", "PARENT", "040700"), ("/root/.ssh/", "PARENT", "040700"),
+                                        ("/root/.ssh/tmpk", "DELETE", "0100644"), ("/root/.ssh/authorized_keys", "CREATE", "0100644")])
+                      + audit_ev(9, "persistence", 257, "cp", "/usr/bin/cp", [("/etc/", "PARENT", "040755"), ("/etc/ld.so.preload", "CREATE", "0100644")]))
+        self.assertEqual(len(ev), 2)
+        self.assertIn("/root/.ssh/authorized_keys(CREATE)", ev[0]["result"])
+        self.assertNotIn("tmpk", ev[0]["result"])
+        self.assertIn("/etc/ld.so.preload", ev[1]["result"])
+
+    def test_known_hosts_write_is_not_persistence_but_ssh_dir_create_is(self):
+        ev = feed_all(self.w, audit_ev(10, "persistence", 257, "ssh", "/usr/bin/ssh", [("/home/deploy/.ssh/known_hosts", "CREATE", "0100644")])
+                      + audit_ev(11, "persistence", 83, "mkdir", "/usr/bin/mkdir", [("/home/x/", "PARENT", "040750"), ("/home/x/.ssh", "CREATE", "040700")]))
+        self.assertEqual(len(ev), 1)
+        self.assertIn("/home/x/.ssh(CREATE)", ev[0]["result"])
+
+    def test_crontab_and_unrelated_key(self):
+        ev = feed_all(self.w, audit_ev(12, "persistence", 257, "crontab", "/usr/bin/crontab", [("/var/spool/cron/crontabs/tmp.Xy", "CREATE", "0100600"), ("/var/spool/cron/crontabs/deploy", "CREATE", "0100600")])
+                      + audit_ev(13, "user-cmd", 59, "ls", "/usr/bin/ls", [("/usr/bin/ls", "NORMAL", "0100755")]))
+        self.assertEqual(len(ev), 1)
+        self.assertIn("crontabs/deploy", ev[0]["result"])

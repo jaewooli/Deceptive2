@@ -257,12 +257,15 @@ def whois(value):
 
 
 def notify_config():
-    """세 서버 moa-notify: 웹훅 = 환경 프로필, SSH 감시(sshd)는 디코이만 켬(정상 업무에서 아무도 안 들어옴), 회사 서버엔 같은 모양으로 꺼 둠"""
+    """세 서버 moa-notify: 웹훅 = 환경 프로필, SSH 감시(sshd)는 디코이만 켬(정상 업무에서 아무도 안 들어옴), 회사 서버엔 같은 모양으로 꺼 둠.
+    감사(audit — 자격증명 파일 열람·지속성 경로)는 모든 서버 켬"""
     n = dests()["notify"]
     sshd = {"path": "/var/log/auth.log", "settle_seconds": 3}
+    audit = {"path": "/var/log/audit/audit.log", "dedupe_seconds": 30}   # 자격증명 파일 열람·지속성 경로(11/26) — 모든 서버 켬(자체 설계)
     for h in inventory().get("company", []) + inventory().get("decoys", []):
         st, _ = one(h, [{"kind": "moa_set", "values": {"webhook_url": n["webhook_url"], "format": n.get("format", "json")}},
-                        {"kind": "moa_watch", "watch": "sshd", "enabled": h in inventory().get("decoys", []), "cfg": sshd}])
+                        {"kind": "moa_watch", "watch": "sshd", "enabled": h in inventory().get("decoys", []), "cfg": sshd},
+                        {"kind": "moa_watch", "watch": "audit", "enabled": True, "cfg": audit}])
         print(h, st)
 
 
@@ -285,16 +288,18 @@ def decoy_agent_files(a):
 
 
 def install_decoy_agent(r, pid):
-    """이미 만든 투영 디코이에 moa-notify 넣기: 끄고 → 디스크에 설치 → 켜기(1분 안팎)"""
+    """이미 만든 투영 디코이에 moa-notify·감사 규칙 넣기(회사 서버와 같게): 끄고 → 디스크에 설치 → 켜기(1분 안팎)"""
     p = r["placements"][pid]
     a, n = p["anchor"], p["anchor"]["name"]
     files, nb = decoy_agent_files(a)
     run = (f"set -euo pipefail\ncd \"$(dirname \"$0\")\"\nbash guest/guest.sh offline {n}\n"
+           f"bash guest/audit.sh {n} guest/base\n"
+           f"install -m 0644 guest/base/ssh/50-loglevel.conf /var/lib/machines/{n}/etc/ssh/sshd_config.d/50-loglevel.conf\n"
            f"bash guest/moa.sh {n} guest/moa/moa_notify.py guest/moa/moa-notify.service guest/moa/config.json\n"
            f"bash guest/guest.sh online {n}\n")
     one(dests()["farm"]["host"], [{"kind": "bundle", "entry": "run.sh", "argv": [],
-                                   "tgz": _tgz({"guest": str(SRV / "hosts/farm/guest"), "run.sh": run.encode(), **files})}])
-    print(f"moa-notify → {n}(설정 모양 = {nb})")
+                                   "tgz": _tgz({"guest": str(SRV / "hosts/farm/guest"), "guest/base": str(SRV / "base"), "run.sh": run.encode(), **files})}])
+    print(f"moa-notify·감사 규칙 → {n}(설정 모양 = {nb})")
 
 
 def place_projection(r, pid):
@@ -319,7 +324,7 @@ def place_projection(r, pid):
             f"BASE_IMAGE='{os.path.expanduser(g.get('base_image') or '')}' CWAGENT_MODE={g['cwagent_mode']} PERSIST={str(farm.get('persist', True)).lower()} BUILD_REDIRECT='{redirect}'")
     run = (f"set -euo pipefail\ncd \"$(dirname \"$0\")\"\n"
            f"{genv} APT_SNAPSHOT={a.get('platform', {}).get('apt_snapshot') or ''} APT_SNAPSHOT_SECURITY={a.get('platform', {}).get('apt_snapshot_security') or ''} APT_MANUAL_UPGRADE={a.get('platform', {}).get('apt_manual_upgrade') or ''} bash guest/guest.sh create {n} {a['addr']} {a['gw']} {p['mac']} {a['mem']} {g['cpus']} {','.join(a['packages'])} mgmt.pub {'pg' if a['pg'] else ''}\n"
-           f"bash guest/guest.sh offline {n}\n(cd role && GUEST_NAME={n} bash ./role.sh {' '.join(rargs)})\n"
+           f"bash guest/guest.sh offline {n}\n(cd role && GUEST_NAME={n} bash ./role.sh {' '.join(rargs)})\nbash guest/audit.sh {n} guest/base\n"
            f"bash guest/moa.sh {n} guest/moa/moa_notify.py guest/moa/moa-notify.service guest/moa/config.json\n"
            f"bash guest/guest.sh seal {n}\nbash guest/guest.sh online {n}\n")
     if g.get("mirror_files"):   # 진짜 서버에만 손으로 둔 로컬 전용 파일을 그대로(권한·소유자·시각) — 값은 저장소에 없음
@@ -825,7 +830,7 @@ def main():
     wh.set_defaults(f=lambda a: whois(a.value))
     nc = sp.add_parser("notify-config", help="세 서버(회사·디코이) moa-notify 웹훅을 환경 프로필 값으로 통일")
     nc.set_defaults(f=lambda a: notify_config())
-    ap_ = sp.add_parser("decoy-agent", help="이미 만든 투영 디코이에 moa-notify(회사 표준 구성) 넣기")
+    ap_ = sp.add_parser("decoy-agent", help="이미 만든 투영 디코이에 moa-notify·감사 규칙(회사 표준 구성) 넣기")
     ap_.add_argument("template")
     ap_.set_defaults(f=lambda a: install_decoy_agent(load_reg(), next(pid for pid, p in load_reg()["placements"].items()
                      if p["type"] == "projection" and p["status"] == "active" and p["anchor"]["template"] == a.template)))

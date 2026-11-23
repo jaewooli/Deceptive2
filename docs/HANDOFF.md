@@ -177,3 +177,16 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - **한계**: 이웃이 손으로 full-upgrade하면(`apt_manual_upgrade = after`) 디코이 unattended는 보안 외 업데이트를 안 따라감 → reblend가 경고만(다시 만들지 여부는 그때 판단). 주기 실행: 로컬은 명령만(WSL 자동 시작 금지), AWS는 팜 timer — 11/28 구축 때
 - 남은 일: 11/27(디코이 세션 명령 첨부·출발지 포렌식·경보 연관), 11/28 AWS 구축, 11/30 오탐
 
+## 16. 11/23 밤 — 11/26분 앞당김: 미끼 열람 감시 + 결과 기반 감시 P0(사용자: 11/26 먼저, 그다음 11/27 벤더 기술)
+- 사용자 결정(11/23): 다음 벤더 기술은 **계획 안 것부터**(① Illusive 출발지 포렌식 ② Attivo·IllusionBLACK 디코이 행동 기록 → 여유 시 ③ tar-pit, ④ 자동 격리 12/1·⑤ ASM 12/2·⑥ CloudTrail 11/28은 계획 날짜). 행동 기록의 투영 디코이 = **팜이 디코이 디스크를 읽기 전용으로 읽음**(게스트 흔적 0, 일관성 먼저 실측), 포렌식 = **관리 쪽 상관기**(로컬 호스트 → AWS Lambda+SSM 11/29), 스위치 = **기술마다 따로**(forensics·engagement·tarpit)
+- 열람 감시 = **자격증명 위치 일반 규칙**(사용자 결정 — 미끼별 규칙은 `auditctl -l`로 미끼 위치 노출). 결과 감시 P0 + **사용자 crontab 추가**(사용자 결정, 범위 변경 기록)
+- 구현: `servers/base/audit/60-persistence.rules`, `account-rules.sh`(서버 계정·서비스에서 규칙 생성, 꺼진 디스크도), `install.sh audit`, moa-notify `audit` 감시(테스트 7개 추가, 27개), `notify-config`가 모든 서버 켬, 투영 디코이는 `engine.py decoy-agent`(`guest/audit.sh`) — 새 디코이는 빌드의 역할 단계 뒤에 자동
+- 검사: inside.spec 감사 규칙 비교를 "공통 부분 = app-01 + 계정 규칙 존재"로 바꿈. detect.py 3경로 추가(T1 .env·T6 키 파일·authorized_keys) → 8경로 모두 1.2초 이내. farm-host check 전부 통과
+- **첫 오탐 실측(11/30 재료)**: SSM 에이전트가 `/root/.aws/credentials`를 약 30초마다 읽음(서버당 20분에 44건) + CloudWatch 에이전트. 그 파일은 로컬 랩 전용(onPremise 모드 키) → EC2에선 없을 것, 11/28 확인. 1분 한도(30건)는 아직 안 넘음
+- 트러블슈팅: `auditctl -l`이 `exe!=`를 `exe=`로 보여 줌(규칙에 안 씀), path·dir 규칙은 `-w` 형식으로 보임. `ausearch`는 표준입력이 파이프면 그걸 읽음(`--input-logs </dev/null`). 꺼진 디스크의 `/etc/systemd/system` 별칭은 호스트 경로를 가리키는 절대 심볼릭 링크 → 건너뜀
+- **서버에 남은 프로젝트 용어(CLAUDE.md 위반, 이전부터)** 발견·수정: `/opt/moa-notify/moa_notify.py` 주석(디코이·미끼·트랩·벤더 이름 — 세 서버와 투영 디코이 모두), `/etc/ssh/sshd_config.d/50-loglevel.conf` 주석, `/etc/wireguard/wg0.conf`(edh-tunnel.sh heredoc 안 주석), web-01 `/home/ubuntu/servers`(11/20 업로드 사본 — 모두 git에 있어 삭제, 홈 시각 복원). 근거·설명은 README로, 팜 감시 클래스 `TunnelIn`·경보 source `터널`. 재발 방지: static.sh 용어 검사(서버에 남는 파일) + inside.spec 5대 용어 검사(자기 hostname 줄 제외)
+  - 실수: wg0.conf 시각 보존용 임시 사본을 `/root`에 만들어 web-01·app-01 `/root` 시각이 오늘로 바뀜(원래 값 모름 — 꾸미지 않고 기록)
+- **열린 문제(11/28 AWS hostname 설계 때)**: 로컬 db-backup-01의 hostname이 랩 VM 이름 `lt-decoy`(→ /etc/hostname, 호스트 키 주석 `root@lt-decoy`, CloudWatch 에이전트 파일). app-01은 `lt-app`. 로컬 VM 이름을 바꾸면 cloud-init hostname 처리(11/23 호스트 키 사고 경로)를 건드림 → 지금은 기록만. AWS에선 hostname을 서사 이름으로 정하고 호스트 키 주석까지 확인할 것
+- 검사가 남기는 소음: 용어 검사·탐지 검사가 root로 자격증명 파일을 읽어 `감사` 경보가 남(측정 흔적 — 랩 관리 세션 auid=ubuntu로 구별)
+- 다음: 11/27 ① 출발지 포렌식(관리 쪽 상관기) ② 디코이 행동 기록(db-backup-01은 moa-notify가 user-cmd 첨부, 투영 디코이는 팜 디스크 읽기)
+

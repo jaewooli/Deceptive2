@@ -27,9 +27,18 @@ CASES = [
      "sudo -u deploy -H ssh -o BatchMode=yes -o ConnectTimeout=5 db-backup-01 true",
      {"source": "sshd", "client": "{ip:web-01}", "result": "SHA256:"}),
     ("투영 stg-01", "projection", "web-01", "timeout 3 bash -c 'exec 3<>/dev/tcp/{proj:stg:ip}/22; read -r l <&3'",
-     {"source": "투영", "result": "{proj:stg:name}("}),
+     {"source": "터널", "result": "{proj:stg:name}("}),
     ("투영 dev-01", "projection", "app-01", "timeout 3 bash -c 'exec 3<>/dev/tcp/{proj:dev:ip}/22; read -r l <&3'",
-     {"source": "투영", "result": "{proj:dev:name}("}),
+     {"source": "터널", "result": "{proj:dev:name}("}),
+    # 호스트 쪽(auditd, 자체 설계 — 항상 켬): 미끼만 지목하지 않는 일반 규칙이라 미끼 파일도 잡힘
+    ("T1 .env 열람(web-01)", None, "web-01", "sudo -u deploy cat /srv/app/.env >/dev/null",
+     {"source": "감사", "result": "/srv/app/.env"}),
+    ("T6 키 파일 열람(app-01)", None, "app-01", "sudo -u postgres cat /var/lib/postgresql/.aws/credentials >/dev/null",
+     {"source": "감사", "result": "/var/lib/postgresql/.aws/credentials"}),
+    # 지속성: 한 줄 붙였다가 원래 크기·시각으로 되돌림(디렉터리는 안 건드림)
+    ("지속성 authorized_keys(app-01)", None, "app-01",
+     "f=/root/.ssh/authorized_keys; s=$(stat -c %s $f); m=$(stat -c %y $f); echo >> $f; truncate -s $s $f; touch -d \"$m\" $f",
+     {"source": "감사", "result": "/root/.ssh/authorized_keys"}),
     ("트랩 app-01 빈 포트", "trap", "web-01", "timeout 3 bash -c 'exec 3<>/dev/tcp/{ip:app-01}/{trap:app-01:port}; printf \"PING\\r\\n\" >&3; head -c5 <&3'",
      {"source": "포트", "client": "{ip:web-01}"}),
 ]

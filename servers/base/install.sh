@@ -25,17 +25,8 @@ base() {
   apt-get update -q
   apt-get install -y -q auditd clamav unattended-upgrades logrotate cron
 
-  # audit 규칙: 배포판 예제 + 로그인 세션 명령 기록
-  for f in "${AUDIT_FROM_EXAMPLES[@]}"; do
-    test -f "$AUDIT_EXAMPLES/$f" || { echo "없음: $AUDIT_EXAMPLES/$f" >&2; exit 1; }
-    install -m 0640 "$AUDIT_EXAMPLES/$f" "/etc/audit/rules.d/$f"
-  done
-  install -m 0640 audit/50-user-cmd.rules /etc/audit/rules.d/50-user-cmd.rules
-  # 패키지 기본 audit.rules는 10-base-config와 같은 내용이고, 이름순으로 맨 뒤에 읽혀 -D로 앞 규칙을 지운다
-  rm -f /etc/audit/rules.d/audit.rules
   systemctl enable --now auditd
-  augenrules --load
-  audit/check.sh
+  audit
 
   systemctl enable --now unattended-upgrades cron logrotate.timer
   systemctl enable --now clamav-freshclam || true
@@ -49,6 +40,24 @@ base() {
 
   ssh
   agents
+}
+
+# audit 규칙: 배포판 예제 + 로그인 세션 명령 + 지속성 경로 + 계정·서비스 자격증명 파일(이 서버 계정에서 생성)
+#   계정·서비스가 바뀌면 다시: sudo ./install.sh audit
+audit() {
+  for f in "${AUDIT_FROM_EXAMPLES[@]}"; do
+    test -f "$AUDIT_EXAMPLES/$f" || { echo "없음: $AUDIT_EXAMPLES/$f" >&2; exit 1; }
+    install -m 0640 "$AUDIT_EXAMPLES/$f" "/etc/audit/rules.d/$f"
+  done
+  install -m 0640 audit/50-user-cmd.rules /etc/audit/rules.d/50-user-cmd.rules
+  install -m 0640 audit/60-persistence.rules /etc/audit/rules.d/60-persistence.rules
+  local t; t=$(mktemp)
+  audit/account-rules.sh > "$t"
+  install -m 0640 "$t" /etc/audit/rules.d/61-account-files.rules; rm -f "$t"
+  # 패키지 기본 audit.rules는 10-base-config와 같은 내용이고, 이름순으로 맨 뒤에 읽혀 -D로 앞 규칙을 지운다
+  rm -f /etc/audit/rules.d/audit.rules
+  augenrules --load
+  audit/check.sh
 }
 
 # sshd 로그 수준(세 서버 공통 — 디코이만 다르면 단서). sshd는 같은 항목의 처음 값을 쓰고, 조각은 본문 앞에서 읽힌다
@@ -101,7 +110,8 @@ case "${1:-base}" in
   base) base ;;
   agents) agents ;;
   ssh) ssh ;;
+  audit) audit ;;
   postgresql) postgresql ;;
   hostkeys) hostkeys "${2:-}" ;;
-  *) echo "사용법: $0 [base|agents|ssh|postgresql|hostkeys <시각>]" >&2; exit 2 ;;
+  *) echo "사용법: $0 [base|agents|ssh|audit|postgresql|hostkeys <시각>]" >&2; exit 2 ;;
 esac

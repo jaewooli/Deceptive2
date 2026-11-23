@@ -211,7 +211,7 @@ def _is_conn_related(msg):
             or any(p.match(msg) for p, _ in PG_RESULT))
 
 
-# ---------------------------------------------------------------- SSH 접속(디코이 목적지 탐지, 11/23)
+# ---------------------------------------------------------------- SSH 접속
 SSH_LINE = re.compile(r"^(?P<ts>\S+) \S+ sshd\[(?P<pid>\d+)\]: (?P<msg>.*)$")
 SSH_RULES = [   # (정규식, 처리) — OpenSSH 9.6. 키 지문은 LogLevel VERBOSE에서 실패 시도에도 남는다(공통 베이스)
     (re.compile(r"^Connection from (?P<ip>\S+) port (?P<port>\d+) on "), "conn"),
@@ -225,8 +225,7 @@ SSH_RULES = [   # (정규식, 처리) — OpenSSH 9.6. 키 지문은 LogLevel VE
 
 
 class SshSessions:
-    """디코이 sshd 로그에서 접속 하나(sshd 자식 pid)를 알림 하나로. 디코이는 정상 업무에서 아무도 안 들어오므로 모든 접속이 신호.
-    시도한 키 지문을 같이 보낸다 — 지문 → 어느 미끼인지는 서버 밖(미끼 엔진 whois)에서(서버에 미끼 목록을 두지 않음)"""
+    """sshd 로그에서 접속 하나(sshd 자식 pid)를 알림 하나로. 시도한 키 지문을 같이 보낸다(지문 해석은 서버 밖에서)"""
 
     name = "sshd"
 
@@ -315,11 +314,11 @@ def listening_ports():
 
 
 class ForwardedPorts:
-    """이 서버에서 쓰지 않는 포트로 온 연결을 터널로 트랩에 넘기고, 넘길 때마다 알린다.
-    이 서버 주소:포트 → (nftables DNAT) 터널 안 주소(169.254.200.1):포트 → 트랩이 다시 이 서버 주소로 DNAT.
-    conntrack이 양쪽에서 되돌려 공격자·트랩 모두 진짜 주소를 본다(11/22: masquerade면 서비스가 중계를 드러냄).
+    """이 서버에서 쓰지 않는 포트로 온 연결을 터널 건너편 서버로 넘기고, 넘길 때마다 알린다.
+    이 서버 주소:포트 → (nftables DNAT) 터널 안 주소(169.254.200.1):포트 → 건너편이 다시 이 서버 주소로 DNAT.
+    conntrack이 양쪽에서 되돌려 양 끝 모두 원래 주소를 본다(masquerade면 서비스가 중계를 드러냄).
     정책 규칙(ip rule)은 쓰지 않는다 — local 경로표 규칙을 옮겼더니 networkd 재시작 때 지워져 서버 전체가 먹통이 됨(11/22).
-    최악의 경우에도 넘기기만 꺼지고 서버는 멀쩡하다. 실제 프로그램이 그 포트를 쓰기 시작하면 그 포트만 빼고(양보) 알린다."""
+    최악의 경우에도 넘기는 것만 꺼지고 서버는 멀쩡하다. 실제 프로그램이 그 포트를 쓰기 시작하면 그 포트만 빼고(양보) 알린다."""
 
     name = "ports"
 
@@ -353,8 +352,8 @@ class ForwardedPorts:
 
     @staticmethod
     def teardown(cfg):
-        """트랩 중계를 끈(또는 설정에서 뺀) 채로 시작할 때: 예전에 건 DNAT·TTL 보정·터널 경로를 지운다 — 남기면 그 포트가 계속 터널로 간다
-        (11/23 Illusive 트랩 스위치를 끄며 확인). 운영 서버의 다른 규칙은 건드리지 않는다(자기 테이블·체인·경로만)"""
+        """넘기기를 끈(또는 설정에서 뺀) 채로 시작할 때: 예전에 건 DNAT·TTL 보정·터널 경로를 지운다 — 남기면 그 포트가 계속 터널로 간다.
+        서버의 다른 규칙은 건드리지 않는다(자기 테이블·체인·경로만)"""
         import subprocess
         table, chain = cfg.get("table", "local_fwd"), cfg.get("ttl_chain", "LOCAL_FWD")
         inner, tunnel = cfg.get("inner", "169.254.200.1"), cfg.get("tunnel", "wg0")
@@ -488,7 +487,7 @@ class PayloadGate:
     @staticmethod
     def teardown(cfg):
         """관문을 끈 채로 시작할 때: 예전에 건 TPROXY·fwmark 규칙을 지운다. 남기면 PG(5432)로 오는 연결이
-        아무도 듣지 않는 관문 포트로 계속 돌려져 PG에 닿지 못한다(11/23 Attivo 스위치를 만들며 확인)"""
+        아무도 듣지 않는 관문 포트로 계속 돌려져 PG에 닿지 못한다"""
         import subprocess
         mark, rt = int(cfg.get("mark", 1)), int(cfg.get("table_id", 100))
         # 우리가 만든 흔적이 있을 때만 — 없는 서버에서 경로표를 비우면 남의 경로를 지울 수 있다(fail-safe)
@@ -520,7 +519,7 @@ class PayloadGate:
         except OSError:
             first = b""
         if not first:
-            self.quiet += 1  # 페이로드 없이 끝남(미끼 연결) — 알리지 않음
+            self.quiet += 1  # 페이로드 없이 끝남(핸드셰이크만 한 연결) — 알리지 않음
             c.close()
             return
         ts = datetime.now().astimezone().isoformat(timespec="milliseconds")
@@ -558,7 +557,7 @@ class PayloadGate:
         return []
 
     def tick(self):
-        # networkd 재시작 등으로 규칙·경로가 지워지면 관문이 꺼진다(PG가 직접 받음 — 탐지는 되지만 미끼 연결이 PG 로그에 남음) → 5초마다 확인
+        # networkd 재시작 등으로 규칙·경로가 지워지면 관문이 꺼진다(PG가 직접 받음 — 핸드셰이크만 한 연결도 PG 로그에 남음) → 5초마다 확인
         now = time.monotonic()
         if now >= getattr(self, "next_heal", 0):
             self.next_heal = now + 5
@@ -637,24 +636,22 @@ def format_text(ev):
 
 
 # ---------------------------------------------------------------- 실행
-# ---------------------------------------------------------------- 투영 디코이로 들어온 새 연결(팜 쪽 — Acalvio: 탐지는 디코이 밖, 11/23)
+# ---------------------------------------------------------------- 터널로 들어와 안쪽 손님 서버로 가는 새 연결
 RE_PROJ = re.compile(r"^(?P<ts>\S+) \S+ kernel: (?:\[[\d. ]+\] )?(?P<prefix>\S+) .*?SRC=(?P<src>\S+) DST=(?P<dst>\S+) .*?PROTO=(?P<proto>\S+)"
                      r"(?:.*? SPT=(?P<spt>\d+) DPT=(?P<dpt>\d+))?")
 
 
-class ProjectionIn:
-    """팜이 relay 터널에서 디코이로 넘기는 새 연결(nft log, 접두 cfg.prefix)을 알린다. 디코이는 정상 업무에서 아무도 안 쓰므로
-    모든 접근이 신호(Acalvio 특허 US9756075: "any access ... to the security mechanism is automatically suspect").
-    디코이 안 데몬과 달리 공격자가 디코이를 장악해도 끌 수 없다. 투영 주소 → 디코이 이름은 팜의 /etc/guest/*.env에서"""
+class TunnelIn:
+    """터널에서 안쪽 손님 서버로 넘기는 새 연결(nft log, 접두 cfg.prefix)을 알린다. 주소 → 이름은 guest_env_dir/*.env(ADDR=)에서"""
 
     name = "projection"
 
     def __init__(self, cfg, host):
         self.host = host
-        self.prefix = cfg.get("prefix", "PROJ-IN")
+        self.prefix = cfg["prefix"]
         self.env_dir = cfg.get("guest_env_dir", "/etc/guest")
 
-    def decoy(self, ip):
+    def guest_name(self, ip):
         import glob
         for f in glob.glob(os.path.join(self.env_dir, "*.env")):
             try:
@@ -669,15 +666,128 @@ class ProjectionIn:
         if not m or m["prefix"] != self.prefix:
             return []
         port = f":{m['dpt']}" if m["dpt"] else ""
-        return [{"host": self.host, "source": "투영", "client": m["src"] + (f":{m['spt']}" if m["spt"] else ""), "user": None,
-                 "database": None, "result": f"{self.decoy(m['dst'])}({m['dst']}{port}/{m['proto']}) 새 연결", "log_ts": m["ts"],
+        return [{"host": self.host, "source": "터널", "client": m["src"] + (f":{m['spt']}" if m["spt"] else ""), "user": None,
+                 "database": None, "result": f"{self.guest_name(m['dst'])}({m['dst']}{port}/{m['proto']}) 새 연결", "log_ts": m["ts"],
                  "lines": [line.split(" kernel: ", 1)[-1][:300]]}]
 
     def tick(self):
         return []
 
 
-WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate, "sshd": SshSessions, "projection": ProjectionIn}
+# ---------------------------------------------------------------- 자격증명 파일 열람·지속성 경로 변경(auditd)
+RE_AUDIT = re.compile(r"^type=(?P<type>\S+) msg=audit\((?P<ts>\d+\.\d+):(?P<serial>\d+)\): (?P<body>.*)$")
+RE_KV = re.compile(r'(\w+)=("[^"]*"|\S+)')
+
+
+def audit_fields(body):
+    raw, _, enriched = body.partition("\x1d")   # ENRICHED 형식: 뒤쪽 대문자 이름은 숫자 → 이름 풀이
+    f = {k: v.strip('"') for k, v in RE_KV.findall(raw)}
+    f.update({"_" + k: v.strip('"') for k, v in RE_KV.findall(enriched)})
+    return f
+
+
+def audit_str(v):
+    """따옴표 없는 값은 16진수(공백·특수 문자가 든 이름, proctitle)"""
+    if v and re.fullmatch(r"[0-9A-Fa-f]+", v) and len(v) % 2 == 0:
+        try:
+            return bytes.fromhex(v).replace(b"\x00", b" ").decode("utf-8", "replace").strip()
+        except ValueError:
+            return v
+    return v
+
+
+class AuditFiles:
+    """auditd 기록에서 감시 키가 붙은 사건을 알린다.
+    - secret-files: ~/.ssh·~/.aws 안 파일, 서비스 필수 환경 파일 열람(T1552.001·T1552.004)
+    - persistence: authorized_keys·~/.ssh 만들기, /etc/ld.so.preload, cron.d·사용자 crontab 변경
+    거르는 것: 규칙 적재(auditctl), 디렉터리 자체 열기(ls), sshd의 authorized_keys 읽기(접속마다 — 사전 인증), 같은 프로세스·같은 파일 반복"""
+
+    name = "audit"
+    PERSIST_NAMES = re.compile(r"(?:/\.ssh/authorized_keys2?|^/etc/ld\.so\.preload|^/etc/cron\.d/.+|^/var/spool/cron/crontabs/.+)$")
+
+    def __init__(self, cfg, host):
+        self.host = host
+        self.keys = cfg.get("keys", {"secret-files": "자격증명 파일 열람", "persistence": "지속성 경로 변경"})
+        self.skip_exe = set(cfg.get("skip_exe", ["/usr/sbin/sshd", "/usr/sbin/auditctl"]))
+        self.window = float(cfg.get("dedupe_seconds", 30))
+        self.ev = {}        # serial → {ts, syscall, paths, cwd, title, last}
+        self.seen = {}      # (pid, key, path) → 시각
+
+    def feed(self, line):
+        m = RE_AUDIT.match(line)
+        if not m:
+            return []
+        t, serial, f = m["type"], m["serial"], audit_fields(m["body"])
+        e = self.ev.get(serial)
+        if t == "SYSCALL":
+            key = f.get("key", "")
+            if key not in self.keys:
+                return []
+            self.ev[serial] = {"ts": float(m["ts"]), "sc": f, "paths": [], "cwd": None, "title": None, "last": time.monotonic()}
+            return []
+        if e is None:
+            return []
+        e["last"] = time.monotonic()
+        if t == "CWD":
+            e["cwd"] = audit_str(f.get("cwd"))
+        elif t == "PATH":
+            e["paths"].append(f)
+        elif t == "PROCTITLE":
+            e["title"] = audit_str(f.get("proctitle"))
+            return self._finish(serial)
+        elif t == "EOE":
+            return self._finish(serial)
+        return []
+
+    def tick(self):
+        now = time.monotonic()
+        for k in [k for k, t in self.seen.items() if now - t > self.window]:
+            del self.seen[k]
+        out = []
+        for serial in [s for s, e in self.ev.items() if now - e["last"] > 1]:
+            out += self._finish(serial)
+        return out
+
+    def _finish(self, serial):
+        e = self.ev.pop(serial, None)
+        if not e:
+            return []
+        sc = e["sc"]
+        key, exe, comm = sc["key"], audit_str(sc.get("exe", "")), audit_str(sc.get("comm", ""))
+        if exe in self.skip_exe:
+            return []
+        names = []
+        for p in e["paths"]:
+            n = audit_str(p.get("name", ""))
+            if not n or p.get("nametype") == "PARENT" or p.get("mode", "").startswith("04"):   # 디렉터리 자체
+                if not (key == "persistence" and p.get("nametype") == "CREATE" and n.endswith("/.ssh")):
+                    continue
+            if not n.startswith("/") and e["cwd"]:
+                n = os.path.normpath(os.path.join(e["cwd"], n))
+            if key == "persistence" and not (self.PERSIST_NAMES.search(n) or (p.get("nametype") == "CREATE" and n.endswith("/.ssh"))):
+                continue
+            names.append((n, p.get("nametype", "")))
+        if not names:
+            return []
+        pid, now = sc.get("pid"), time.monotonic()
+        new = [(n, nt) for n, nt in names if (pid, key, n) not in self.seen]
+        for n, _ in names:
+            self.seen[(pid, key, n)] = now
+        if not new:
+            return []
+        auid = sc.get("_AUID") or sc.get("auid")
+        user = sc.get("_UID") or sc.get("uid")
+        what = ", ".join(n + (f"({nt})" if nt not in ("NORMAL", "") else "") for n, nt in new)
+        ok = "" if sc.get("success", "yes") == "yes" else " 실패"
+        return [{"host": self.host, "source": "감사", "client": f"{comm}[{pid}] ppid {sc.get('ppid')}",
+                 "user": user, "database": None, "result": f"{self.keys[key]}{ok}: {what}",
+                 "log_ts": datetime.fromtimestamp(e["ts"]).astimezone().isoformat(timespec="milliseconds"),
+                 "audit": {"key": key, "pid": pid, "ppid": sc.get("ppid"), "auid": auid, "ses": sc.get("ses"),
+                           "uid": user, "exe": exe, "cmd": (e["title"] or "")[:300], "paths": [n for n, _ in new]},
+                 "lines": [f"{exe} {e['title'] or ''}"[:300]]}]
+
+
+WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate, "sshd": SshSessions, "projection": TunnelIn, "audit": AuditFiles}
 
 
 def load_state(path):

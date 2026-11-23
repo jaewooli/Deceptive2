@@ -9,12 +9,13 @@ export DEBIAN_FRONTEND=noninteractive
 command -v wg >/dev/null || apt-get install -y -q wireguard-tools >/dev/null
 install -d -m 0700 /etc/wireguard
 [ -f /etc/wireguard/wg0.key ] || (umask 077; wg genkey > /etc/wireguard/wg0.key)
+# MTU = 구간(LAN·VPC) MTU 그대로(로컬 1500, AWS 9001). 바깥 UDP는 IP 단편화에 맡긴다(WireGuard는 바깥 패킷에 DF를 안 건다).
+# 11/23 실측: 1380 + MSS 조정이면 공격자 SYN-ACK에 MSS 1340(이웃은 1460)·DF 1472 ping 소실·tracepath 무응답 → 디코이가 터널 뒤임이 드러남
+# (설명은 heredoc 밖에 — 서버에 남는 설정 파일엔 쓰지 않는다)
 cat > /etc/wireguard/wg0.conf <<CONF
 [Interface]
 PrivateKey = $(cat /etc/wireguard/wg0.key)
 Table = off
-# MTU = 구간(LAN·VPC) MTU 그대로(로컬 1500, AWS 9001). 바깥 UDP는 IP 단편화에 맡긴다(WireGuard는 바깥 패킷에 DF를 안 건다).
-# 11/23 실측: 1380 + MSS 조정이면 공격자 SYN-ACK에 MSS 1340(이웃은 1460)·DF 1472 ping 소실·tracepath 무응답 → 디코이가 터널 뒤임이 드러남
 MTU = $(cat /sys/class/net/"$(ip -o route get 1.1.1.1 | sed -n 's/.* dev \([^ ]*\).*/\1/p')"/mtu)
 
 [Peer]
