@@ -7,6 +7,7 @@
   python3 baits/engine.py rotate [ID|--all] 고유 ID 교체. 옛 ID는 retired로 남겨 계속 감시
   python3 baits/engine.py recall [ID|--host H|--all]  깨끗하게 회수
   python3 baits/engine.py list
+기능 켜고 끄기: python3 baits/engine.py feature projection|trap on|off / feature - status
 투영 디코이(projection): plan이 blend.py로 구간·이름·주소를 정하고, apply가 센서 투영 + 팜 KVM VM을 만든다(destinations.yml의 sensor.nics 필요)
 레지스트리: out/baits/registry.json(로컬, 커밋 안 함 — 미끼 실제 값이 들어 있음). AWS에선 비공개 S3(11/28)
 목적지: out/baits/destinations.yml  {db-backup-01: {ip: ...}}
@@ -108,7 +109,8 @@ def constraints():
 
 def plan(r, ctxs):
     deny = constraints()
-    active = {p["anchor_key"]: pid for pid, p in r["placements"].items() if p["status"] == "active"}
+    active = {p["anchor_key"]: pid for pid, p in r["placements"].items() if p["status"] in ("active", "paused")}   # paused = 기능 꺼 둠(자리 유지)
+    off = {FEATURES[n][1] for n, st in r.get("features", {}).items() if st == "off"}
     used = {p["ident"]["value"] for p in r["placements"].values()}
     new, seen = [], set()
     live_ports = [{"host": p["host"], "service": p["anchor"]["service"], "port": p["anchor"]["port"]}
@@ -121,7 +123,7 @@ def plan(r, ctxs):
                 if key in seen:  # 같은 파일을 여러 서비스가 쓰면 규칙이 같은 자리를 여러 번 찾는다(11/22 중복 배치)
                     continue
                 seen.add(key)
-                if key in active:
+                if key in active or tname in off:
                     continue
                 if key in deny:
                     print(f"막힘    {tname:12} {host:12} {key} — {deny[key]}")
@@ -132,7 +134,8 @@ def plan(r, ctxs):
                 new.append({"type": tname, "host": host, "anchor": a, "anchor_key": key})
                 used.add("_")
     gone = [pid for key, pid in active.items() if key not in seen and r["placements"][pid]["host"] in ctxs]
-    new += plan_projection(r, ctxs)
+    if "projection" not in off:
+        new += plan_projection(r, ctxs)
     return new, gone
 
 
@@ -148,7 +151,7 @@ def plan_projection(r, ctxs):
         return []
     company = inventory().get("company", [])
     cx = {h: c for h, c in ctxs.items() if h in company}
-    act = [p for p in r["placements"].values() if p["type"] == "projection" and p["status"] in ("active", "pending")]
+    act = [p for p in r["placements"].values() if p["type"] == "projection" and p["status"] in ("active", "pending", "paused")]
     taken = [v["ip"] for v in d.values() if isinstance(v, dict) and "ip" in v] + [p["anchor"]["addr"].split("/")[0] for p in act]
     names = [p["anchor"]["name"] for p in act] + [k for k in d if isinstance(d[k], dict)]
     lan = ipaddress.ip_network(d.get("lan_cidr", "10.0.0.0/16"))
@@ -213,6 +216,37 @@ def role_extras(a):
     return {}, []
 
 
+def decoy_agent_files(a):
+    """디코이 안 moa-notify: 같은 구간 회사 서버의 설정을 그대로(웹훅·형식·감시 항목 모양), 주소만 디코이 것, 트랩 중계(ports)는 끔"""
+    d = dests()
+    lan = ipaddress.ip_network(a["segment"])
+    ctx = contexts()
+    nb = next((h for h in inventory().get("company", []) for i in ctx.get(h, {}).get("net", {}).get("ifaces", [])
+               if ipaddress.ip_interface(i["addr"]).ip in lan), None) or inventory()["company"][0]
+    _, cd = one(nb, [{"kind": "run", "argv": [], "collect": ["cfg"],
+                      "script": "echo cfg=$(base64 -w0 < /etc/moa-notify/config.json)\n"}])
+    cfg = json.loads(base64.b64decode(cd["cfg"]))
+    ports = cfg.get("watch", {}).get("ports")
+    if isinstance(ports, dict):
+        ports.update({"enabled": False, "address": a["addr"].split("/")[0], "ports": []})
+    m = SRV / "detection/moa-notify"
+    return {"guest/moa/moa_notify.py": str(m / "moa_notify.py"), "guest/moa/moa-notify.service": str(m / "moa-notify.service"),
+            "guest/moa/config.json": json.dumps(cfg, ensure_ascii=False, indent=2).encode()}, nb
+
+
+def install_decoy_agent(r, pid):
+    """이미 만든 투영 디코이에 moa-notify 넣기: 끄고 → 디스크에 설치 → 켜기(1분 안팎)"""
+    p = r["placements"][pid]
+    a, n = p["anchor"], p["anchor"]["name"]
+    files, nb = decoy_agent_files(a)
+    run = (f"set -euo pipefail\ncd \"$(dirname \"$0\")\"\nbash guest/guest.sh offline {n}\n"
+           f"bash guest/moa.sh {n} guest/moa/moa_notify.py guest/moa/moa-notify.service guest/moa/config.json\n"
+           f"bash guest/guest.sh online {n}\n")
+    one(dests()["farm"]["host"], [{"kind": "bundle", "entry": "run.sh", "argv": [],
+                                   "tgz": _tgz({"guest": str(SRV / "hosts/farm/guest"), "run.sh": run.encode(), **files})}])
+    print(f"moa-notify → {n}(설정 모양 = {nb})")
+
+
 def place_projection(r, pid):
     """센서에 투영 주소(구간 NIC 하나) → 그 NIC MAC으로 팜 VM 생성(첫 부팅: 패치·패키지·공통 베이스) → 역할 → 시작"""
     p = r["placements"][pid]
@@ -232,11 +266,19 @@ def place_projection(r, pid):
     g = farm["guest"]   # 환경 프로필(infra/env/<환경>.yml)의 값 — 코드엔 환경 분기 없음
     redirect = ";".join(f"{r['proto']}:{r['to']}:{r['port']}>{r['via']}" for r in g.get("build_redirect") or [])
     genv = (f"GUEST_HW={g['hw']} DISK_GB={g['disk_gb']} GUEST_DNS={g['dns']} APT_PROXY='{g.get('apt_proxy') or ''}' "
-            f"CWAGENT_MODE={g['cwagent_mode']} PERSIST={str(farm.get('persist', True)).lower()} BUILD_REDIRECT='{redirect}'")
+            f"BASE_IMAGE='{os.path.expanduser(g.get('base_image') or '')}' CWAGENT_MODE={g['cwagent_mode']} PERSIST={str(farm.get('persist', True)).lower()} BUILD_REDIRECT='{redirect}'")
     run = (f"set -euo pipefail\ncd \"$(dirname \"$0\")\"\n"
-           f"{genv} APT_SNAPSHOT={a.get('platform', {}).get('apt_snapshot') or ''} bash guest/guest.sh create {n} {a['addr']} {a['gw']} {p['mac']} {a['mem']} {g['cpus']} {','.join(a['packages'])} mgmt.pub {'pg' if a['pg'] else ''}\n"
+           f"{genv} APT_SNAPSHOT={a.get('platform', {}).get('apt_snapshot') or ''} APT_SNAPSHOT_SECURITY={a.get('platform', {}).get('apt_snapshot_security') or ''} APT_MANUAL_UPGRADE={a.get('platform', {}).get('apt_manual_upgrade') or ''} bash guest/guest.sh create {n} {a['addr']} {a['gw']} {p['mac']} {a['mem']} {g['cpus']} {','.join(a['packages'])} mgmt.pub {'pg' if a['pg'] else ''}\n"
            f"bash guest/guest.sh offline {n}\n(cd role && GUEST_NAME={n} bash ./role.sh {' '.join(rargs)})\n"
+           f"bash guest/moa.sh {n} guest/moa/moa_notify.py guest/moa/moa-notify.service guest/moa/config.json\n"
            f"bash guest/guest.sh seal {n}\nbash guest/guest.sh online {n}\n")
+    if g.get("mirror_files"):   # 진짜 서버에만 손으로 둔 로컬 전용 파일을 그대로(권한·소유자·시각) — 값은 저장소에 없음
+        rel = " ".join(f.lstrip("/") for f in g["mirror_files"])
+        _, md = one(g["mirror_from"], [{"kind": "run", "argv": [], "collect": ["mirror"],
+                                        "script": f"echo mirror=$(tar -C / -czf - {rel} | base64 -w0)\n"}])
+        extras["guest/mirror.tgz"] = base64.b64decode(md["mirror"])
+    agent, _ = decoy_agent_files(a)
+    extras.update(agent)
     files = {"guest": str(SRV / "hosts/farm/guest"), "guest/base": str(SRV / "base"),
              "role": str(SRV / "hosts/farm/roles" / a["template"]), "mgmt.pub": key.read_bytes(), "run.sh": run.encode(), **extras}
     one(farm["host"], [{"kind": "bundle", "tgz": _tgz(files), "entry": "run.sh", "argv": []}])
@@ -261,7 +303,19 @@ def dests():
     p = OUT / "destinations.yml"
     if not p.exists():
         raise SystemExit(f"{p} 없음 — python3 infra/env/render.py <환경> 먼저(환경 값은 infra/env/에만)")
-    return yaml.safe_load(p.read_text())
+    d = yaml.safe_load(p.read_text())
+    check_profile(d)
+    return d
+
+
+def check_profile(d):
+    """렌더한 뒤 프로필이 바뀌었으면 멈춘다(옛 값으로 배치하지 않게 — 11/23 복사 목록이 빠진 빌드)"""
+    import hashlib
+    prof = HERE.parent / d.get("profile", "")
+    if not d.get("profile_sha256") or not prof.is_file():
+        raise SystemExit("destinations.yml에 프로필 해시 없음 — python3 infra/env/render.py <환경>")
+    if hashlib.sha256(prof.read_bytes()).hexdigest() != d["profile_sha256"]:
+        raise SystemExit(f"{d['profile']}이 렌더 뒤 바뀜 — python3 infra/env/render.py {d.get('env', '<환경>')} 다시")
 
 
 def build(r, item, rotated_from=None):
@@ -361,7 +415,7 @@ def place_decoy_port(r, pid):
     n = slots.setdefault(host, max(slots.values(), default=0) + 1)
     _, d = one(host, [{"kind": "wg_key", "name": "wg0", "as": "edh_pub"}])
     trap = f"trap-{host}"
-    _, d2 = one(farm["host"], [{"kind": "run", "script": (SRV / "hosts/farm/trap/build.sh").read_text(),
+    _, d2 = one(farm["host"], [{"kind": "run", "script": f"export PERSIST={str(farm.get('persist', True)).lower()}\n" + (SRV / "hosts/farm/trap/build.sh").read_text(),
                                 "argv": [trap, host, str(n), a["service"], str(a["port"]), a["addr"], a["gw"], d["edh_pub"]],
                                 "collect": ["farm_tunnel_public_key"]}])
     one(host, [{"kind": "run", "script": (SRV / "detection/edh-tunnel.sh").read_text(),
@@ -387,6 +441,82 @@ rm -rf /etc/systemd/nspawn/trap-{host}.nspawn /etc/systemd/system/systemd-nspawn
   /etc/systemd/network/10-ve-trap-{host}.network /etc/wireguard/edh{n}.conf /etc/wireguard/edh{n}.key
 ip rule del pref {60 + n} 2>/dev/null; ip rule del pref {161 + n} 2>/dev/null; systemctl daemon-reload
 """}])
+
+
+# ------------------------------------------------------------------ 기능 켜고 끄기(벤더 기술 단위, 11/23 사용자 요청)
+# 끔 = 네트워크에서 그 기능이 없던 상태(경로·규칙·터널·ARP 응답 제거, 디코이는 멈춤 — 디스크·키는 남김). 켬 = 같은 자리·같은 ID로 되살림
+FEATURES = {"projection": ("Acalvio 투영(센서 → 팜 디코이 VM)", "projection"), "trap": ("Illusive 트랩 서버 중계(EDH 빈 포트 → 팜 트랩)", "decoy_port")}
+
+
+def feature_off(r, name):
+    d = dests()
+    typ = FEATURES[name][1]
+    live = [(pid, p) for pid, p in r["placements"].items() if p["type"] == typ and p["status"] == "active"]
+    if name == "projection":
+        for pid, p in live:
+            a = p["anchor"]
+            one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"systemctl stop guest@{a['name']} 2>/dev/null; true\n"}])
+            one(d["sensor"]["host"], [{"kind": "run", "script": (SRV / "hosts/sensor/install.sh").read_text(), "argv": ["remove", a["addr"].split("/")[0]]}])
+            p["status"] = "paused"; event(r, "paused", pid); save_reg(r)
+        for h in (d["sensor"]["host"], d["farm"]["host"]):   # relay는 투영 전용 터널
+            one(h, [{"kind": "run", "argv": [], "script": "systemctl disable --now wg-quick@relay >/dev/null 2>&1; true\n"}])
+    else:
+        hosts = sorted({p["host"] for _, p in live})
+        for pid, p in live:
+            p["status"] = "paused"; event(r, "paused", pid); save_reg(r)
+        for h in hosts:
+            a = next(p["anchor"] for _, p in live if p["host"] == h)
+            n = r.get("farm_slots", {}).get(h)
+            one(h, [{"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": []},
+                    {"kind": "run", "argv": [], "script": "systemctl disable --now wg-quick@wg0 >/dev/null 2>&1; true\n"}])
+            one(d["farm"]["host"], [{"kind": "run", "argv": [], "script":
+                f"systemctl disable --now systemd-nspawn@trap-{h} wg-quick@edh{n} >/dev/null 2>&1; true\n"}])
+    r.setdefault("features", {})[name] = "off"; save_reg(r)
+
+
+def feature_on(r, name):
+    d = dests()
+    typ = FEATURES[name][1]
+    paused = [(pid, p) for pid, p in r["placements"].items() if p["type"] == typ and p["status"] == "paused"]
+    persist = str(d["farm"].get("persist", True)).lower()
+    if name == "projection":
+        for h, en in ((d["farm"]["host"], persist == "true"), (d["sensor"]["host"], True)):
+            one(h, [{"kind": "run", "argv": [], "script": f"{'systemctl enable wg-quick@relay >/dev/null 2>&1; ' if en else ''}systemctl start wg-quick@relay\n"}])
+        for pid, p in paused:
+            a = p["anchor"]
+            _, sd = one(d["sensor"]["host"], [{"kind": "run", "script": (SRV / "hosts/sensor/install.sh").read_text(),
+                                               "argv": ["add", p["nic"], a["addr"], a["gw"]], "collect": ["projection_mac"]}])
+            if sd.get("projection_mac") != p["mac"]:
+                raise SystemExit(f"{a['name']}: 센서 NIC MAC이 바뀜({p['mac']} → {sd.get('projection_mac')}) — 디코이 NIC MAC과 어긋나 ARP에서 드러남")
+            one(d["farm"]["host"], [{"kind": "run", "argv": [], "script": f"systemctl start guest@{a['name']}\n"}])
+            p["status"] = "active"; event(r, "resumed", pid); save_reg(r)
+    else:
+        for pid, p in paused:
+            p["status"] = "active"
+        for h in sorted({p["host"] for _, p in paused}):
+            a = next(p["anchor"] for _, p in paused if p["host"] == h)
+            n = r.get("farm_slots", {}).get(h)
+            one(d["farm"]["host"], [{"kind": "run", "argv": [], "script":
+                f"{'systemctl enable wg-quick@edh%s systemd-nspawn@trap-%s >/dev/null 2>&1; ' % (n, h) if persist == 'true' else ''}"
+                f"systemctl start wg-quick@edh{n} systemd-nspawn@trap-{h}\n"}])
+            one(h, [{"kind": "run", "argv": [], "script": "systemctl enable --now wg-quick@wg0 >/dev/null 2>&1\n"},
+                    {"kind": "ports_config", "address": a["addr"].split("/")[0], "iface": a["iface"], "ports": edh_ports(r, h)}])
+        for pid, p in paused:
+            event(r, "resumed", pid)
+        save_reg(r)
+    r.setdefault("features", {})[name] = "on"; save_reg(r)
+
+
+def cmd_feature(a):
+    r = load_reg()
+    if a.state == "status":
+        for n, (desc, typ) in FEATURES.items():
+            ps = [p for p in r["placements"].values() if p["type"] == typ and p["status"] in ("active", "paused")]
+            print(f"{n:11} {r.get('features', {}).get(n, 'on'):3}  {desc} — 배치 {len(ps)}개"
+                  f" ({', '.join(sorted({p['status'] for p in ps})) or '-'})")
+        return
+    (feature_on if a.state == "on" else feature_off)(r, a.name)
+    print(f"{a.name} {a.state}")
 
 
 def alert(e):
@@ -512,7 +642,7 @@ def cmd_refresh(a):
 
 def cmd_recall(a):
     r = load_reg()
-    targets = [pid for pid, p in r["placements"].items() if p["status"] in ("active", "failed", "pending")
+    targets = [pid for pid, p in r["placements"].items() if p["status"] in ("active", "failed", "pending", "paused")
                and (a.all or pid in a.ids or (a.host and p["host"] == a.host))]
     for pid in [t for t in targets if r["placements"][t]["type"] == "decoy_port"]:
         recall_decoy_port(r, pid)
@@ -540,6 +670,14 @@ def main():
     sp.add_parser("collect").set_defaults(f=lambda a: collect())
     for n, f in (("plan", cmd_plan), ("apply", cmd_apply), ("verify", cmd_verify), ("list", cmd_list)):
         sp.add_parser(n).set_defaults(f=f)
+    ap_ = sp.add_parser("decoy-agent", help="이미 만든 투영 디코이에 moa-notify(회사 표준 구성) 넣기")
+    ap_.add_argument("template")
+    ap_.set_defaults(f=lambda a: install_decoy_agent(load_reg(), next(pid for pid, p in load_reg()["placements"].items()
+                     if p["type"] == "projection" and p["status"] == "active" and p["anchor"]["template"] == a.template)))
+    fp = sp.add_parser("feature", help="벤더 기능 켜고 끄기: feature projection|trap on|off, feature - status")
+    fp.add_argument("name", choices=[*FEATURES, "-"])
+    fp.add_argument("state", choices=["on", "off", "status"])
+    fp.set_defaults(f=cmd_feature)
     for n, f in (("rotate", cmd_rotate), ("recall", cmd_recall), ("refresh", cmd_refresh)):
         p = sp.add_parser(n)
         p.add_argument("ids", nargs="*")

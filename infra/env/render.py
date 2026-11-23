@@ -31,7 +31,11 @@ def main():
         inv["all"]["vars"]["ansible_ssh_private_key_file"] = str(Path(acc["key"]).expanduser())
 
     old = yaml.safe_load((OUT / "destinations.yml").read_text()) if (OUT / "destinations.yml").exists() else {}
-    dest = {"env": env, "lan_cidr": p["lan_cidr"]}
+    import hashlib
+    prof = ROOT / "infra/env" / f"{env}.yml"
+    # 렌더 뒤 프로필을 고치고 다시 렌더하지 않으면 엔진이 옛 값으로 돈다(11/23 실제로 일어남) → 해시를 남겨 엔진·검사가 비교
+    dest = {"env": env, "profile": str(prof.relative_to(ROOT)), "profile_sha256": hashlib.sha256(prof.read_bytes()).hexdigest(),
+            "lan_cidr": p["lan_cidr"]}
     for h, v in p["hosts"].items():
         if v["group"] == "decoys":
             key = (old.get(h) or {}).get("host_key")

@@ -2,6 +2,7 @@
 # 로컬 랩 전체를 한 표로 다룬다(11/22 — 매번 긴 환경 변수를 손으로 쳐서 틀리던 것). 서버 역할 이름으로 부른다.
 #   infra/local-vm/lab.sh up [역할...|all]      # 호스트 서비스(apt 캐시·파일 배포) + VM 켜기 + 공유 LAN 주소 확인
 #   infra/local-vm/lab.sh down [역할...|all]
+#   infra/local-vm/lab.sh reboot <역할...>      # 재부팅은 이것으로만(VM 안 reboot 금지 — cloud-init이 호스트 키를 다시 만듦)
 #   infra/local-vm/lab.sh status
 #   infra/local-vm/lab.sh ssh <역할> [명령]
 #   infra/local-vm/lab.sh run <역할> <로컬 디렉터리> <그 안의 스크립트> [인자...]   # 임시 경로에 풀고 sudo bash 실행 → 지움
@@ -21,7 +22,7 @@ FILES_PORT=8098
 
 # 역할      VM 이름     ssh   pg     seed  메모리  LAN  MAC 끝  LAN 주소      추가 NIC(LAN:MAC 끝,…)  추가 포워딩
 # 메모리: 게스트 실사용(400~540MB) + 여유. 합계를 호스트(7.9GB)의 약 55%로 — 넘기면 호스트 스왑이 차서 VM이 응답을 못 함(11/22)
-#   farm은 디코이 KVM VM(stg-01 768 + dev-01)을 품어 2304. 전부 켜면 55%를 넘는다 → 작업에 필요 없는 VM은 끈다(lab.sh mem으로 확인)
+#   팜은 VM이 아니라 WSL2 자신(infra/local-vm/farm-host.sh, 11/23 — farm VM 안 KVM은 3중 중첩으로 디코이 메모리가 깨짐). 디코이 VM 메모리는 WSL2에서 직접
 #   ClamAV 전체 검사(약 1GB)를 돌릴 때만 그 VM을 VM_MEM=2048로 따로 켠다
 # 센서 NIC: 투영 디코이마다 하나(그 NIC MAC = 디코이 NIC MAC, HANDOFF 9절). enp0s3 = int, enp0s8 = pub
 TABLE="
@@ -29,7 +30,6 @@ router       lt-router  2236  15436  8096  384     int  01      10.0.20.1     pu
 app-01       lt-app     2232  15432  8092  896     int  10      10.0.20.10    -                       -
 web-01       web-01     2235  15435  8095  1024    pub  11      10.0.21.11    -                       -
 db-backup-01 lt-decoy   2231  15431  8091  768     int  15      10.0.20.15    -                       -
-farm         lt-farm    2234  15434  8094  2304    int  40      10.0.20.40    -                       hostfwd=udp:127.0.0.1:51820-:51820
 sensor       lt-sensor  2233  15433  8093  512     int  30      -             pub:30                  -
 "
 
@@ -47,8 +47,7 @@ env_for() {
   fi
   export VM_LAN_EXTRA
   if [ "$extra" != "-" ]; then export VM_EXTRA_FWD=$extra; else unset VM_EXTRA_FWD; fi
-  # farm은 디코이 VM을 품는다(3중 중첩): vCPU 4, 디코이는 1(2면 게스트 메모리 손상 — 11/23 Oops·soft lockup, destinations farm.guest_cpus)
-  if [ "$role" = farm ]; then export VM_CPUS=4; else unset VM_CPUS; fi
+  unset VM_CPUS
   LAN_IP=$ip; LAN_GW=${LANGW[$lan]}; ROLE=$role
 }
 
@@ -84,6 +83,9 @@ case "${1:-}" in
     for r in $(pick "$@"); do env_for "$r"; echo "== $r ($VM_NAME, ${VM_MEM}MB)"; "$VM" up | tail -1; lan_and_proxy "$LAN_IP" "$LAN_GW" "$ROLE"; done ;;
   down)
     shift; for r in $(pick "$@"); do env_for "$r"; "$VM" down; echo "$r 꺼짐"; done ;;
+  reboot)   # 랩 VM 재부팅은 이것으로만 — seed(HTTP)는 lab.sh가 켤 때만 제공된다. VM 안에서 systemctl reboot 하면 cloud-init이
+            # seed를 못 찾아 새 인스턴스(iid-datasource-none)로 보고 SSH 호스트 키를 다시 만든다(11/23 app-01에서 실제로 일어남)
+    shift; host_services; for r in $(pick "$@"); do env_for "$r"; "$VM" down; "$VM" up | tail -1; lan_and_proxy "$LAN_IP" "$LAN_GW" "$ROLE"; done ;;
   status)
     for r in $(roles); do env_for "$r"
       if [ -f "$DIR/$VM_NAME.pid" ] && kill -0 "$(cat "$DIR/$VM_NAME.pid")" 2>/dev/null; then st=켜짐; else st=꺼짐; fi

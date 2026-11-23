@@ -66,10 +66,10 @@ hba="${conf_d%/conf.d}/pg_hba.conf"; line="host    all             all          
 grep -qxF "$line" "$hba" || echo "$line" >> "$hba"
 "${NS[@]}" chown -R postgres:postgres "${conf_d#$ROOT}"
 install -d "$ROOT/root/.c"; cp "$B/carryover/make_carryover.py" "$ROOT/root/.c/"
-"${NSP[@]}" bash -c "set -e; pg_ctlcluster 16 main start
+"${NSP[@]}" bash -c "set -e; pg_ctlcluster --skip-systemctl-redirect 16 main start
   python3 -I /root/.c/make_carryover.py --dump-at 2025-05-12 --dump-out /home/seoyeon/moayeyak-20250512.sql.gz --keep-db moayeyak_dev
   runuser -u postgres -- psql -qX -c \"ALTER ROLE moayeyak LOGIN PASSWORD '$PW';\" >/dev/null
-  pg_ctlcluster 16 main stop; chown seoyeon:seoyeon /home/seoyeon/moayeyak-20250512.sql.gz"
+  pg_ctlcluster --skip-systemctl-redirect 16 main stop; chown seoyeon:seoyeon /home/seoyeon/moayeyak-20250512.sql.gz"
 rm -rf "$ROOT/root/.c"
 
 # ---- 다른 서버로 이어지는 흔적: known_hosts(해시) — 덤프는 db-backup-01에서, 배포는 stg-01·web-01로

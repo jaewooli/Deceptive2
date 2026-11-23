@@ -7,11 +7,11 @@ web-01 | same | ping -c1 -W2 {T} | ttl=(\d+) @ {proj:stg:ip} ~ {ip:app-01} | stg
 web-01 | same | ping -c1 -W2 -M do -s $(( $(cat /sys/class/net/{if:web-01}/mtu) - 28 )) {T} | (\d+) bytes from @ {proj:stg:ip} ~ {ip:app-01} | stg: 구간 MTU 크기 DF 통과 = app-01(PMTU 블랙홀 없음)
 web-01 | same | tracepath -n -m 4 {T} | ^ (\d+):\s+\S+\s.*reached @ {proj:stg:ip} ~ {ip:app-01} | stg traceroute 홉 수 = app-01
 web-01 | same | timeout 5 tcpdump -c1 -nvi {if:web-01} "src host {T} and src port 22 and tcp[13]&18==18" 2>/dev/null & sleep 1; timeout 2 bash -c "exec 3<>/dev/tcp/{T}/22"; wait | (ttl \d+)[\s\S]*?(mss \d+) @ {proj:stg:ip} ~ {ip:app-01} | stg SYN-ACK TTL·MSS = app-01
-web-01 | same | timeout 3 bash -c "exec 3<>/dev/tcp/{T}/22; head -c 60 <&3" | (SSH-[^\r\n]+) @ {proj:stg:ip} ~ {ip:app-01} | stg SSH 배너 = app-01(같은 패치 수준)
+web-01 | same | timeout 3 bash -c "exec 3<>/dev/tcp/{T}/22; read -r l <&3; echo \$l" | (SSH-[^\r\n]+) @ {proj:stg:ip} ~ {ip:app-01} | stg SSH 배너 = app-01(같은 패치 수준)
 web-01 | has | ping -c1 -W2 {proj:stg:ip} >/dev/null; ip neigh show {proj:stg:ip} | lladdr {proj:stg:mac} | stg ARP 값 = 디코이 NIC MAC(센서 투영 NIC)
 app-01 | same | ping -c1 -W2 {T} | ttl=(\d+) @ {proj:dev:ip} ~ {ip:db-backup-01} | dev ICMP TTL = 같은 구간 서버
 app-01 | same | timeout 5 tcpdump -c1 -nvi {if:app-01} "src host {T} and src port 22 and tcp[13]&18==18" 2>/dev/null & sleep 1; timeout 2 bash -c "exec 3<>/dev/tcp/{T}/22"; wait | (ttl \d+)[\s\S]*?(mss \d+) @ {proj:dev:ip} ~ {ip:db-backup-01} | dev SYN-ACK TTL·MSS = 같은 구간 서버
-app-01 | same | timeout 3 bash -c "exec 3<>/dev/tcp/{T}/22; head -c 60 <&3" | (SSH-[^\r\n]+) @ {proj:dev:ip} ~ {ip:db-backup-01} | dev SSH 배너 = 같은 구간 서버
+app-01 | same | timeout 3 bash -c "exec 3<>/dev/tcp/{T}/22; read -r l <&3; echo \$l" | (SSH-[^\r\n]+) @ {proj:dev:ip} ~ {ip:db-backup-01} | dev SSH 배너 = 같은 구간 서버
 
 # ---- 트랩 중계: 넘긴 포트도 같은 서버의 다른 포트와 같게
 web-01 | same | timeout 5 tcpdump -c1 -nvi {if:web-01} "src host {ip:app-01} and src port {T} and tcp[13]&18==18" 2>/dev/null & sleep 1; timeout 2 bash -c "exec 3<>/dev/tcp/{ip:app-01}/{T}"; wait | (ttl \d+)[\s\S]*?(mss \d+) @ {trap:app-01:port} ~ 22 | 트랩 app-01 넘긴 포트 SYN-ACK = app-01:22

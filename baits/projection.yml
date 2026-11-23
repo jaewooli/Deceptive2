@@ -7,14 +7,14 @@ templates:
     services: [22, 80]
     packages: [nginx, postgresql-16, python3-venv, git]
     pg: true
-    mem: 768
+    mem: 1024           # = 같은 구간 진짜 서버(web-01) — free -m으로 바로 보이는 값(11/23: 768이면 이웃과 다름). AWS는 같은 인스턴스 타입
   dev:
     role: 옛 개발 서버(개발자 2명이 같이 쓰던 서버)
     tier: data           # 개발 DB가 있는 서버 → DB 서버가 사는 구간
     services: [22, 5432]
     packages: [postgresql-16, python3-venv, git]
     pg: true
-    mem: 640
+    mem: 896            # = 같은 구간 진짜 서버(app-01). 640이면 빌드 중 unattended-upgrade가 OOM으로 죽음(11/23)
 # 계층 판정: 그 서버에서 도는 프로세스(collect의 processes)
 tiers:
   web: [nginx, gunicorn]

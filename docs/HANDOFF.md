@@ -136,3 +136,13 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - **11/23 세션 끝 상태**: 트랩 2개는 새 구조(web-01 10.0.21.11, 링크 로컬 veth)로 다시 배치, 공격자 시점·경로 단언 stg 관련 외 전부 통과. **디코이 VM 투영은 로컬에서 못 띄움** — 3중 중첩에서 vCPU 1로도 커널 panic(131초, `Attempted to kill init`). stg·dev 배치는 회수함(레지스트리 recalled, 센서 투영 목록 비어 있음). farm-guest.sh 삭제(엔진이 유일한 경로)
 - **다음 세션 첫 결정(사용자)**: 로컬 디코이 VM을 어디서 돌릴지 — ① 로컬만 디코이 VM을 farm 밖(호스트의 L2 VM)으로, farm과는 전용 LAN(socket)으로 이어 farm에서 ve-<이름>으로 보이게(호스트 sudo 없음 → 디스크 마운트·역할 단계는 farm이 nbd를 못 씀 → 역할 적용을 cloud-init·게스트 안으로 옮겨야 함) ② 로컬 검증은 컨테이너로 두고 VM은 11/28 AWS metal 팜에서 처음 검증 ③ AWS에서 바로 metal/중첩 지원 인스턴스로. 검사 명세(inside.local.txt)는 준비돼 있음
 - 엔진 배치 후 남은 확인: inside 검사(detect-virt=kvm, auditd, MAC, sr1 없음, user-data 봉인, 스냅숏 설정 제거, 커널 = 이웃 149), dev 역할 첫 실행(미검증), 투영 디코이의 목적지 탐지(moa-notify — 11/25 일정과 묶음)
+
+## 12. 11/23 오후 — 지금 상태 (위 11절의 "다음 세션 첫 결정"은 해결됨: 로컬 팜 = WSL2)
+- **구조**: 팜 = WSL2 자신(`infra/local-vm/farm-host.sh up|down|check|status`, farm VM 없음). 랩 VM: router·app-01·web-01·db-backup-01·sensor. 환경 값은 `infra/env/local.yml`만 → `python3 infra/env/render.py local`(프로필 고치면 반드시 다시 — 엔진·검사가 해시로 막음)
+- **안전 규칙**: WSL2 복구 `docs/local-farm-recovery.md`(부팅 자동 시작 없음 → `wsl --shutdown`이 완전 복구). 랩 VM 재부팅은 `lab.sh reboot`만(VM 안 reboot 금지 — cloud-init이 호스트 키 재생성, 11/23 app-01). 홈 디렉터리 와일드카드 삭제 금지
+- **투영 디코이**: 엔진이 블렌딩→배치(`engine.py apply`), 켜고 끄기 `engine.py feature projection|trap on|off|status`, 디코이에 회사 표준 moa-notify `engine.py decoy-agent <템플릿>`. stg-01(pub 10.0.21.12, 1024MB)·dev-01(int 10.0.20.11, 896MB) 모두 배치, moa-notify 포함, **검사 4종(paths·attacker·inside·lab) 전부 통과**
+- **검사**: `infra/checks/static.sh`(배포 전), `farm-host.sh check` = paths·attacker·inside·lab 명세(환경 중립, 진짜 서버와 그 자리 비교)
+- **진짜 서버**: app-01·web-01 11/23 full-upgrade(커널 151). app-01 SSH 호스트 키는 11/23 11:39 재생성됨(옛 키 복구 불가 — 그 키를 기억하던 미끼·디코이는 없음 확인), 시각은 2024-06-12로 다시 맞춤
+- **투영 켜고 끄기 시험(11/23 통과)**: off → 센서 투영 목록 비고 relay 없음(센서·팜), 디코이 VM 0대, 공격자 자리에서 응답 없음, 트랩은 그대로 통과 / on → 같은 주소·같은 NIC MAC으로 되살아나 검사 4종 통과
+- **남은 일(순서)**: ③ 11/25 목적지 탐지: 팜 쪽 접속 경보(Acalvio — 디코이 밖 탐지, 특허 원문 확인함) + 기존 계획 ④ 웹훅 설정 통일(세 서버 값이 다름, 4절 7번) ⑤ 디코이 이후 업데이트 방식(unattended 켤지) — 사용자 결정 대기 ⑥ 11/28 AWS: aws.yml 채우기, EC2 모양·IMDS(local-aws-parity 4절), 팜 = metal 또는 C8i/M8i/R8i 중첩
+- 알려진 한계: 디코이 /proc/meminfo 4kB 차이, 디코이 감사 로그에 구축 당일 기록(진짜 서버는 회전), 진짜 랩 VM엔 옛 cloud-init 인스턴스 디렉터리가 여러 개(디코이는 하나), 디코이는 빌드 뒤 인터넷 없음

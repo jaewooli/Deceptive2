@@ -39,7 +39,7 @@ PostUp = ip route replace default dev %i table $T_OUT
 PostUp = iptables -w -t mangle -C PREROUTING -i %i -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i %i -j TTL --ttl-inc 1
 PostUp = iptables -w -t mangle -C PREROUTING -i ve-+ -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i ve-+ -j TTL --ttl-inc 1
 # Docker가 있는 팜(WSL2)은 FORWARD 기본 정책이 DROP일 수 있다 → 팜 인터페이스끼리만 허용(DOCKER-USER는 Docker 규칙보다 먼저 봄)
-PostUp = iptables -w -n -L DOCKER-USER >/dev/null 2>&1 && for x in "-i %i" "-o %i" "-i ve-+" "-o ve-+" "-i edh+" "-o edh+"; do iptables -w -C DOCKER-USER $x -j ACCEPT 2>/dev/null || iptables -w -I DOCKER-USER $x -j ACCEPT; done; true
+PostUp = iptables -w -n -L DOCKER-USER >/dev/null 2>&1 && for x in "-i %i" "-o %i" "-i ve-+" "-o ve-+" "-i edh+" "-o edh+"; do iptables -w -C DOCKER-USER \$x -j ACCEPT 2>/dev/null || iptables -w -I DOCKER-USER \$x -j ACCEPT; done; true
 
 [Peer]
 PublicKey = $SENSOR_PUB

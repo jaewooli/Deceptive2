@@ -181,7 +181,7 @@ def platform():
             pk[p[0]] = p[2]
     # 마지막 패키지 업그레이드 시각(UTC) — 디코이를 같은 아카이브 스냅숏으로 맞추는 기준(최신으로 올리면 이웃보다 앞서 커널이 달라짐, 11/23)
     import glob, gzip, time as _t
-    last = None
+    last, last_sec, last_upg = None, None, None
     for f in glob.glob("/var/log/apt/history.log*"):
         try:
             text = (gzip.open(f, "rt", errors="replace") if f.endswith(".gz") else open(f, errors="replace")).read()
@@ -189,11 +189,27 @@ def platform():
             continue
         for block in text.split("\n\n"):
             m = re.search(r"^Start-Date: (\d{4}-\d\d-\d\d)\s+(\d\d:\d\d:\d\d)", block, re.M)
-            if m and re.search(r"^(Upgrade|Install): ", block, re.M):
-                t = _t.mktime(_t.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S"))
+            # 패치 수준 = 세 겹(11/23 실측): ① 서버를 만든 클라우드 이미지(serial) ② 사람이 마지막으로 돌린 apt 작업(설치·업그레이드 —
+            # 그때 일반 저장소 버전이 들어옴) ③ 마지막 unattended-upgrade(보안 저장소만). 시각 하나로 찍으면 그 사이 나온 커널 151이 디코이에만 들어감
+            if not (m and re.search(r"^(Upgrade|Install): ", block, re.M)):
+                continue
+            t = _t.mktime(_t.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S"))
+            if re.search(r"^Commandline: .*unattended-upgrade", block, re.M):
+                last_sec = max(last_sec or 0, t)
+            elif re.search(r"^Commandline: ", block, re.M):
                 last = max(last or 0, t)
-    apt_last = _t.strftime("%Y%m%dT%H%M%SZ", _t.gmtime(last + 60)) if last else None
-    return {"kernel": os.uname().release, "os": osr.get("PRETTY_NAME"), "packages": pk, "apt_snapshot": apt_last}
+                if re.search(r"^Commandline: .*\b(upgrade|full-upgrade|dist-upgrade)\b", block, re.M):
+                    last_upg = max(last_upg or 0, t)   # 사람이 직접 업그레이드(디코이도 그 시점·순서대로 재현)
+    ts = lambda x: _t.strftime("%Y%m%dT%H%M%SZ", _t.gmtime(x + 60)) if x else None
+    serial = None
+    try:
+        serial = next((l.split(":", 1)[1].strip() for l in open("/etc/cloud/build.info") if l.startswith("serial:")), None)
+    except OSError:
+        pass
+    return {"kernel": os.uname().release, "os": osr.get("PRETTY_NAME"), "packages": pk, "image_serial": serial,
+            "apt_snapshot": ts(last), "apt_snapshot_security": ts(max(last or 0, last_sec or 0) or None),
+            # 직접 업그레이드가 마지막 unattended보다 뒤면 "after", 앞이면 "before", 없으면 None — 디코이 빌드가 같은 순서로 밟는다
+            "apt_manual_upgrade": None if not last_upg else ("after" if last_upg > (last_sec or 0) else "before")}
 
 
 def main():

@@ -19,6 +19,8 @@
 | 서브넷·라우터 | VPC(암묵적 라우터, TTL 안 줄임) | LAN 2개 + router VM(TTL 보정) | 로컬 전용 장치 | 로컬에만 |
 | MTU | 9001 | 1500 | 같음(구간 MTU를 읽음) | 자동 |
 | IMDS | 진짜 서버: AWS / 디코이: 팜이 흉내 | 없음 | 미구현 | AWS에서만 의미 |
+| 로컬 VM에만 손으로 둔 파일 | 없음(에이전트는 IAM 역할) | `/root/.aws` CloudWatch onPremise용 예시 키(infra/loadtest/README.md) | 같음 | `guest.mirror_files` — 빌드 때 진짜 서버에서 그대로 복사(11/23: 없어서 디코이 공통 베이스 실패) |
+| 디코이 출발 이미지·패치 | 서버 AMI serial + 이웃의 apt·unattended 시점 | 랩 VM이 쓴 이미지 파일 + 같은 시점 | 같음 | `guest.base_image`, 스냅숏은 블렌딩이 이웃에서 잼 |
 
 ## 3. 조사(11/23) — 로컬로 못 보는 것의 가장 가까운 근거
 - **EC2 중첩 가상화**: 2026년 초부터 Intel 8세대(C8i·M8i·R8i)에서 공식 지원, KVM·Hyper-V를 L1으로 명시, 추가 요금 없음, 시작 때 CPU 옵션 `NestedVirtualization=enabled`. 성능 민감하면 여전히 metal 권장. 7세대 확대·리전은 2차 출처 → **서울 리전 제공 여부를 AWS 문서로 확인할 것**

@@ -461,6 +461,9 @@ class PayloadGate:
 class Notifier:
     def __init__(self, cfg):
         self.url = cfg["webhook_url"]
+        if not str(self.url).startswith(("http://", "https://")):
+            # 주소가 틀려도 감시는 멈추지 않는다 — 경보는 로그(journal)에만 남김(11/23: 채워지지 않은 템플릿 값으로 데몬이 죽어 재시작 반복)
+            log.error("웹훅 주소가 올바르지 않음(%r) — 경보는 로그에만 남김", self.url)
         self.fmt = cfg.get("format", "json")  # discord | slack | json
         self.max_per_minute = int(cfg.get("max_per_minute", 30))
         self.sent = deque()
@@ -482,8 +485,12 @@ class Notifier:
 
     def _post(self, event):
         body = json.dumps(self._payload(event), ensure_ascii=False).encode()
-        req = urllib.request.Request(self.url, data=body, headers={
-            "Content-Type": "application/json", "User-Agent": "moa-notify/1.0"})
+        try:
+            req = urllib.request.Request(self.url, data=body, headers={
+                "Content-Type": "application/json", "User-Agent": "moa-notify/1.0"})
+        except ValueError as e:   # 주소 형식 오류는 재시도해도 같다 — 데몬은 계속 돈다
+            log.error("웹훅 주소 오류(%s) — 경보: %s", e, json.dumps(event, ensure_ascii=False))
+            return
         for attempt in range(3):
             try:
                 with urllib.request.urlopen(req, timeout=5) as r:

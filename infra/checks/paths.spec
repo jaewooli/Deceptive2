@@ -8,7 +8,7 @@ app-01 | has | ip rule show pref 0 | lookup local | app-01: local 규칙 pref 0
 web-01 | has | ip rule show pref 0 | lookup local | web-01: local 규칙 pref 0
 # 팜의 기본 경로·main/default 규칙은 팜 장치가 건드리지 않는다(WSL2 팜 = 사용자 작업 환경, docs/local-farm-recovery.md)
 {farm} | has | ip rule show | ^32766:\s+from all lookup main | 팜: main 규칙 그대로
-{farm} | hasnt | ip rule show | ^([1-9]|[1-4][0-9]):\s | 팜: pref 1~48에 낯선 규칙 없음(팜 규칙은 49~)
+{farm} | hasnt | ip rule show | ^([1-9]|[1-3][0-9]|4[0-8]):\s | 팜: pref 1~48에 낯선 규칙 없음(팜 규칙은 49~)
 # networkd가 외래 규칙·경로를 지우지 않게(networkd를 쓰는 서버만 — WSL2 팜은 networkd 없음)
 {sensor} | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageForeignRoutingPolicyRules=no | 센서: networkd 외래 규칙 보존
 app-01 | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageForeignRoutingPolicyRules=no | app-01: networkd 외래 규칙 보존
@@ -28,7 +28,7 @@ web-01 | has | cat /etc/systemd/networkd.conf.d/10-keep-foreign.conf | ManageFor
 {farm} | route | {ip:web-01} from {proj:stg:ip} iif ve-{proj:stg:name} | relay | 팜: stg 응답 → 터널(비면 LAN 직행 — 11/23 키 교환 멈춤)
 {farm} | route | {proj:dev:ip} from {ip:app-01} iif relay | ve-{proj:dev:name} | 팜: 터널로 온 것 → dev VM
 {farm} | route | {ip:app-01} from {proj:dev:ip} iif ve-{proj:dev:name} | relay | 팜: dev 응답 → 터널
-{farm} | has | ip route show table 120 | unreachable default .*metric 4000 | 팜: 터널이 없으면 디코이 응답을 버림(fail-closed)
+{farm} | has | ip route show table 120; : 디코이 {proj:stg:name} 있을 때만 | unreachable default .*metric 4000 | 팜: 터널이 없으면 디코이 응답을 버림(fail-closed)
 {farm} | has | ip route show {proj:stg:ip}/32 | blackhole .*metric 1000 | 팜: stg가 죽어도 응답이 새지 않음
 {farm} | has | sysctl -n net.ipv4.conf.all.arp_ignore | ^1$ | 팜: 다른 NIC 주소로 ARP에 답하지 않음(라우터 .1 가로채기 — 11/23)
 {farm} | hasnt | ip -4 -o addr show | inet {proj:stg:gw}/ | 팜: 디코이 게이트웨이(.1)를 자기 주소로 두지 않음

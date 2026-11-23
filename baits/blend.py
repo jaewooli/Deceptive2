@@ -90,10 +90,14 @@ def plan(ctxs, conf, lan, taken_addrs=(), taken_names=(), placed=()):
             if v:
                 pkgs[p] = v
         snap = majority(p.get("apt_snapshot") for p in plats)
-        why.append(f"플랫폼: 이웃 다수 커널 {kernel}, {osname}, 패키지 {pkgs}, 아카이브 스냅숏 {snap}(이웃의 마지막 업그레이드)")
+        snap_sec = majority(p.get("apt_snapshot_security") for p in plats)
+        serial = majority(p.get("image_serial") for p in plats)
+        manual = majority(p.get("apt_manual_upgrade") for p in plats)
+        why.append(f"플랫폼: 이웃 다수 커널 {kernel}, {osname}, 패키지 {pkgs}, 이미지 serial {serial}, 아카이브 스냅숏 일반 {snap}·보안 {snap_sec}(이웃의 마지막 apt 작업·unattended-upgrade), 직접 업그레이드 {manual or '없음'}")
         out.append({"template": key, "name": name, "segment": str(net), "addr": f"{a}/{net.prefixlen}",
                     "gw": str(net.network_address + 1), "services": t["services"], "packages": t["packages"],
-                    "pg": bool(t.get("pg")), "mem": t["mem"], "platform": {"kernel": kernel, "os": osname, "packages": pkgs, "apt_snapshot": snap},
+                    "pg": bool(t.get("pg")), "mem": t["mem"], "platform": {"kernel": kernel, "os": osname, "packages": pkgs, "apt_snapshot": snap, "apt_snapshot_security": snap_sec, "image_serial": serial,
+                                 "apt_manual_upgrade": manual},
                     "why": why})
     return out
 

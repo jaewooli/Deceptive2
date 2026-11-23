@@ -23,6 +23,9 @@ farm:
   guest:
     cpus: 2
     disk_gb: 8                 # EC2 기본 루트 볼륨
+    base_image: ~               # 서버 AMI와 같은 serial의 클라우드 이미지(cloud-images.ubuntu.com/releases/noble/release-<serial>/)
+    mirror_from: ~             # EC2 모드 에이전트는 IAM 역할을 씀 — 복사할 파일 없음
+    mirror_files: []
     hw: aws                    # EC2처럼(DMI·NVMe·IMDS) — 미구현
     cwagent_mode: ec2
     dns: ~                     # VPC 리졸버(10.0.0.2)

@@ -167,3 +167,16 @@ class NotifierTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NotifierBadUrlTest(unittest.TestCase):
+    """11/23: web-01 설정의 웹훅이 채워지지 않은 템플릿 값('{{ webhook_url }}')이라 경보 순간 ValueError로 데몬이 죽어 재시작 반복"""
+
+    def test_bad_url_does_not_raise(self):
+        n = mn.Notifier({"webhook_url": "{{ webhook_url }}", "format": "json"})
+        with self.assertLogs(mn.log, level="ERROR"):
+            n.send({"host": "web-01", "source": "test", "result": "x"})
+
+
+if __name__ == "__main__":
+    unittest.main()

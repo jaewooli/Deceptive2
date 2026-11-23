@@ -99,10 +99,10 @@ chmod 440 "$ROOT/etc/sudoers.d/deploy"; stamp "2024-06-05 16:44:10" "$ROOT/etc/s
 install -d "$ROOT/root/.c"; cp "$B/carryover/make_carryover.py" "$ROOT/root/.c/"
 # PG는 비부팅 nspawn 안에서 직접 띄운다(사설망 — 루프백만, 팜 LAN에 5432가 잠깐도 안 열림)
 PW=$(sed -n 's|^DATABASE_URL=postgresql+psycopg://moayeyak:\([^@]*\)@.*|\1|p' "$ROOT/srv/app/.env")
-"${NSP[@]}" bash -c "set -e; pg_ctlcluster 16 main start
+"${NSP[@]}" bash -c "set -e; pg_ctlcluster --skip-systemctl-redirect 16 main start
   python3 -I /root/.c/make_carryover.py --dump-at 2025-05-12 --dump-out /home/deploy/moayeyak-20250512.sql.gz --keep-db moayeyak
   runuser -u postgres -- psql -qX -c \"ALTER ROLE moayeyak LOGIN PASSWORD '$PW';\" >/dev/null
-  pg_ctlcluster 16 main stop; chown -R deploy:deploy /home/deploy"
+  pg_ctlcluster --skip-systemctl-redirect 16 main stop; chown -R deploy:deploy /home/deploy"
 rm -rf "$ROOT/root/.c"
 
 # ---- 시각: 첫 구축·마지막 배포에 맞춘다(재구축 때 rsync -a로 옮김 → mtime 보존, ctime은 재구축일)

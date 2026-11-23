@@ -7,6 +7,8 @@ ip addr replace 169.254.31.2/32 dev $t 2>/dev/null
 ip link set $t up 2>/dev/null
 sysctl -q -w net.ipv4.conf.$t.proxy_arp=1 2>/dev/null
 sysctl -q -w net.ipv4.conf.$t.rp_filter=2 2>/dev/null
+# 빌드 중(guest.sh create)이면: 디코이가 본 프록시·DNS 주소를 팜의 127.0.0.1로 돌리는 DNAT이 통하게(빌드 끝나면 guest.sh가 끔)
+[ -f /run/guest-$n.build ] && sysctl -q -w net.ipv4.conf.$t.route_localnet=1 2>/dev/null
 ip route replace $x/32 dev $t
 # 응답 → relay 터널(경로표 120은 relay PostUp이 채움). 터널이 없으면 unreachable로 버린다 — 비어 있으면 main으로 떨어져
 # 같은 LAN으로 바로 나가 터널을 우회한다(11/23 SSH 키 교환 멈춤의 원인)

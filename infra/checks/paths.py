@@ -47,6 +47,10 @@ class Missing(Exception):
 
 def variables():
     dest = yaml.safe_load((OUT / "destinations.yml").read_text())
+    import hashlib
+    prof = ROOT / dest.get("profile", "")
+    if not prof.is_file() or hashlib.sha256(prof.read_bytes()).hexdigest() != dest.get("profile_sha256"):
+        sys.exit(f"환경 프로필이 렌더 뒤 바뀜(또는 해시 없음) — python3 infra/env/render.py {dest.get('env', '<환경>')} 다시")
     lan = ipaddress.ip_network(dest.get("lan_cidr", "10.0.0.0/16"))
     v = {"farm": dest["farm"]["host"], "sensor": dest["sensor"]["host"]}
     for f in (OUT / "context").glob("*.json"):
@@ -129,10 +133,11 @@ def transport(host, dest):
 def run_host(host, cmds, dest):
     try:
         r = subprocess.run(transport(host, dest), shell=True, input=script_for(cmds), capture_output=True, text=True, timeout=90)
-        raw = r.stdout
+        raw, err = r.stdout, r.stderr
     except subprocess.TimeoutExpired:
-        raw = ""
+        raw, err = "", "시간 초과(90초)"
     if "@@end" not in raw:
+        print(f"  ! {host} 접속 실패: {(err or raw).strip().splitlines()[-1:] or ['(출력 없음)']}")
         return None
     blocks = re.split(r"^@@(\d+|end)$", raw, flags=re.M)
     return {int(blocks[k]): blocks[k + 1] for k in range(1, len(blocks) - 1, 2) if blocks[k].isdigit()}

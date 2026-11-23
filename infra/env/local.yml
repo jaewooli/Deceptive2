@@ -16,7 +16,8 @@ access:
   run: "{root}/infra/local-vm/lab.sh ssh {host} 'sudo sh -s'"
   run_local: "sudo sh -s"                       # 팜 = WSL2 자신
   # 투영 디코이 안쪽: 회사 서버(web-01)를 점프 호스트로(관리 키는 호스트에만, 디코이 auth.log에 web-01 출발 로그인이 남음 — 측정 흔적)
-  run_decoy: "ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -J ubuntu@127.0.0.1:2235 ubuntu@{host} 'sudo sh -s'"
+  #   점프는 ProxyCommand로 — -J는 점프 호스트에 -o 옵션이 안 먹어 사용자의 ~/.ssh/known_hosts와 부딪힘(11/23, 사용자 파일은 건드리지 않음)
+  run_decoy: "ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ProxyCommand='ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 2235 -W %h:%p ubuntu@127.0.0.1' ubuntu@{host} 'sudo sh -s'"
 hosts:
   web-01: {group: company, port: 2235}
   app-01: {group: company, port: 2232}
@@ -33,6 +34,12 @@ farm:
   guest:
     cpus: 2                    # 랩 VM과 같은 2(WSL2 위 1단 KVM이라 3중 중첩 문제 없음)
     disk_gb: 20                # 로컬 진짜 VM 디스크(vda 20G). AWS는 8
+    # 디코이 출발 이미지 = 이웃(진짜 서버)과 같은 serial — 로컬은 랩 VM이 쓴 바로 그 파일(11/23: 팜이 새로 받은 이미지는 serial이 달랐음)
+    base_image: ~/.cache/deceptive2-vm/noble-server-cloudimg-amd64.img
+    # 로컬 랩 VM에만 손으로 둔 파일(infra/loadtest/README.md: CloudWatch 에이전트 onPremise용 AWS 문서 예시 키) — 디코이도 같게.
+    # 값은 저장소에 두지 않고 빌드 때 진짜 서버에서 그대로 복사(권한·소유자·시각 유지). 없으면 공통 베이스의 fetch-config가 실패(11/23)
+    mirror_from: app-01
+    mirror_files: [/root/.aws/credentials, /root/.aws/config]
     hw: local                  # 기계 모양: local = 랩 VM(q35·virtio·nocloud), aws = EC2처럼(미구현 — local-aws-parity 4절)
     cwagent_mode: onPremise
     dns: 10.0.2.3              # 디코이 안 DNS = 진짜 랩 VM과 같은 값(QEMU 사용자망 DNS)
