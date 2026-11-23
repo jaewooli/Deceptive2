@@ -46,6 +46,9 @@ def main():
                     "guest": f["guest"]}
     sensor = next(h for h, v in p["hosts"].items() if v["group"] == "sensors")
     dest["sensor"] = {"host": sensor, "nics": {seg: s["sensor_nics"] for seg, s in p["segments"].items()}}
+    dest["access"] = {k: acc.get(k) for k in ("run", "run_local", "run_decoy")}
+    dest["access"]["key"] = str(Path(acc["key"]).expanduser()) if acc.get("key") else ""
+    dest["access"]["local_hosts"] = [h for h, v in p["hosts"].items() if v.get("connection") == "local"]
     dest["segments"] = {seg: {"name": s["name"], "gw": s["gw"]} for seg, s in p["segments"].items()}
 
     OUT.mkdir(parents=True, exist_ok=True)

@@ -12,6 +12,11 @@ segments:                      # 구간 = 서브넷. 게이트웨이 = .1(로컬
 access:
   user: ubuntu
   key: ~/.cache/deceptive2-vm/id_ed25519
+  # 검사 실행기(infra/checks/paths.py)의 접속: 표준입력의 셸 스크립트를 root로. {host} {root} {key}
+  run: "{root}/infra/local-vm/lab.sh ssh {host} 'sudo sh -s'"
+  run_local: "sudo sh -s"                       # 팜 = WSL2 자신
+  # 투영 디코이 안쪽: 회사 서버(web-01)를 점프 호스트로(관리 키는 호스트에만, 디코이 auth.log에 web-01 출발 로그인이 남음 — 측정 흔적)
+  run_decoy: "ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -J ubuntu@127.0.0.1:2235 ubuntu@{host} 'sudo sh -s'"
 hosts:
   web-01: {group: company, port: 2235}
   app-01: {group: company, port: 2232}
