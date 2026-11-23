@@ -40,7 +40,9 @@ up() {
   [ -n "$spub" ] || { echo "센서 키 없음 — 센서에 install.sh tunnel 먼저" >&2; exit 2; }
   local nurl
   nurl=$("$CTL" -c "import yaml; print(yaml.safe_load(open('$ROOT/infra/env/local.yml'))['notify']['farm_webhook_url'])")
-  fpub=$(cd "$ROOT/servers/hosts/farm" && sudo PERSIST=false NOTIFY_URL="$nurl" bash ./install.sh "$spub" | sed -n 's/^relay_public_key=//p')
+  local mint
+  mint=$("$CTL" -c "import yaml; print(yaml.safe_load(open('$ROOT/infra/env/local.yml'))['farm']['guest']['mirror_intercept'])")
+  fpub=$(cd "$ROOT/servers/hosts/farm" && sudo PERSIST=false NOTIFY_URL="$nurl" MIRROR_INTERCEPT="$mint" bash ./install.sh "$spub" | sed -n 's/^relay_public_key=//p')
   ep=$("$CTL" -c "import yaml; print(yaml.safe_load(open('$ROOT/infra/env/local.yml'))['farm']['tunnel_endpoint'])")
   "$LAB" run sensor "$ROOT/servers/hosts/sensor" install.sh tunnel "$ep:51820" "$fpub" | tail -1
   # 6. 레지스트리에서 active인 트랩·디코이만 다시 켠다(기능을 꺼 둔 paused는 그대로) — 새로 두는 건 엔진 apply

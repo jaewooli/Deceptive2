@@ -165,4 +165,15 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - **팜 쪽 탐지(Acalvio)**: relay PostUp nft `proj_watch`(새 연결 로그, 초당 20) + 팜 `relay-notify`(같은 코드, `projection` 감시 — 디코이 이름·진짜 출발지). relay와 수명 같음(Wants·PartOf). 투영 디코이 안 moa-notify는 바깥 길이 없어 경보를 못 보냄 → 탐지는 팜(설계대로)
 - **탐지 검사** `infra/checks/detect.py`(farm-host check에 포함): 5경로(디코이 DB·SSH 미끼 키·투영 stg·dev·트랩) 모두 0.6~1.4초(기준 60초)
 - 고친 것: 디코이 `/backup/.ssh` 디렉터리 시각이 미끼 재기록 때 오늘로 바뀜 → 적용기가 상위 디렉터리 시각 보존, nft 예약어 체인(`fwd`) 정적 검사
-- 남은 일: 주기적 재블렌딩(사용자 결정), 디코이 세션 명령 첨부(11/27 계획), 출발지 포렌식(11/27), 관리 접속 소음 억제(11/30)
+- 남은 일: ~~주기적 재블렌딩~~(15절), 디코이 세션 명령 첨부(11/27 계획), 출발지 포렌식(11/27), 관리 접속 소음 억제(11/30)
+
+## 15. 11/23 밤 — 주기적 재블렌딩 = 시점 고정 apt 미러(사용자 결정)
+- **구조**: 디코이는 이웃처럼 **자기 unattended-upgrades**로 업데이트(재부팅 없음, 같은 흔적). 팜 `relay-mirror`(`servers/hosts/farm/guest/mirror.py`, 169.254.31.2:3144)가 디코이 apt 요청을 받아 **이웃과 같은 시점의 snapshot.ubuntu.com**에서 돌려줌
+  - 가로채기: relay PostUp nft `proj_mirror`(`ve-*` 들어온 것 중 프로필 `farm.guest.mirror_intercept` — 로컬 `10.0.2.2:3142`(디코이의 lab 프록시 설정), AWS `*:80`(투명)) → DNAT
+  - 허용: archive·security.ubuntu.com `/ubuntu/`의 GET·HEAD만, 나머지 403(디코이가 인터넷 통로가 되지 않게). 요청은 모두 journal(공격자의 apt 사용도 흔적)
+  - 시점: 출발지 → `/etc/guest/<이름>.env`의 `SNAPSHOT`(일반)·`SNAPSHOT_SECURITY`(보안 저장소). 요청마다 다시 읽음
+- **재블렌딩** `engine.py reblend [--no-collect]`: 이웃 맥락 다시 수집 → `blend.segment_platform` → 바뀌면 팜 env의 시점 값만 바꿈 + 레지스트리 `reblended` 이벤트. 디코이는 다음 unattended 실행 때 따라감
+  - 확인: stg-01 보안 시점을 일부러 옛 값으로 → reblend가 이웃 값으로 되돌림. 디코이 `apt-get update` = 미러 경유, 이웃 시점, 업그레이드 대상 0
+- **한계**: 이웃이 손으로 full-upgrade하면(`apt_manual_upgrade = after`) 디코이 unattended는 보안 외 업데이트를 안 따라감 → reblend가 경고만(다시 만들지 여부는 그때 판단). 주기 실행: 로컬은 명령만(WSL 자동 시작 금지), AWS는 팜 timer — 11/28 구축 때
+- 남은 일: 11/27(디코이 세션 명령 첨부·출발지 포렌식·경보 연관), 11/28 AWS 구축, 11/30 오탐
+

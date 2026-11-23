@@ -46,6 +46,8 @@ farm:
     # 값은 저장소에 두지 않고 빌드 때 진짜 서버에서 그대로 복사(권한·소유자·시각 유지). 없으면 공통 베이스의 fetch-config가 실패(11/23)
     mirror_from: app-01
     mirror_files: [/root/.aws/credentials, /root/.aws/config]
+    # 재블렌딩: 디코이 apt 요청을 팜의 시점 고정 미러로(디코이의 01-lab-proxy 주소를 가로챔). AWS는 "*:80"(투명)
+    mirror_intercept: "10.0.2.2:3142"
     hw: local                  # 기계 모양: local = 랩 VM(q35·virtio·nocloud), aws = EC2처럼(미구현 — local-aws-parity 4절)
     cwagent_mode: onPremise
     dns: 10.0.2.3              # 디코이 안 DNS = 진짜 랩 VM과 같은 값(QEMU 사용자망 DNS)

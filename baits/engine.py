@@ -216,6 +216,34 @@ def role_extras(a):
     return {}, []
 
 
+def reblend(do_collect=True):
+    """주기적 재블렌딩(11/23 사용자 결정 — 시점 고정 미러): 이웃의 패치 시점이 바뀌었으면 팜의 디코이 env 시점 값만 바꾼다.
+    디코이는 자기 unattended-upgrades(이웃과 같은 타이머)로 다음 실행 때 그 시점까지 따라간다(재부팅 없음, 바깥 길은 미러뿐)"""
+    ctxs = collect() if do_collect else contexts()
+    r, d = load_reg(), dests()
+    company = inventory().get("company", [])
+    lan = ipaddress.ip_network(d.get("lan_cidr", "10.0.0.0/16"))
+    for pid, p in r["placements"].items():
+        if p["type"] != "projection" or p["status"] not in ("active", "paused"):
+            continue
+        a = p["anchor"]
+        new = blend.segment_platform({h: c for h, c in ctxs.items() if h in company}, projection_conf(), lan, a["segment"])
+        old = a.get("platform", {})
+        if (new["apt_snapshot"], new["apt_snapshot_security"]) == (old.get("apt_snapshot"), old.get("apt_snapshot_security")):
+            print(f"{a['name']}: 그대로({old.get('apt_snapshot')}·{old.get('apt_snapshot_security')})")
+            continue
+        n = a["name"]
+        one(d["farm"]["host"], [{"kind": "run", "argv": [], "script":
+            f"sed -i -e 's/^SNAPSHOT=.*/SNAPSHOT={new['apt_snapshot'] or ''}/' -e 's/^SNAPSHOT_SECURITY=.*/SNAPSHOT_SECURITY={new['apt_snapshot_security'] or ''}/' /etc/guest/{n}.env\n"}])
+        a["platform"] = dict(old, **new)
+        event(r, "reblended", pid, detail=f"{old.get('apt_snapshot')}·{old.get('apt_snapshot_security')} → {new['apt_snapshot']}·{new['apt_snapshot_security']}")
+        save_reg(r)
+        print(f"{n}: 시점 바꿈 → 일반 {new['apt_snapshot']}, 보안 {new['apt_snapshot_security']} (디코이 unattended가 다음 실행 때 따라감)")
+        if new.get("apt_manual_upgrade") == "after" and new["apt_snapshot"] != old.get("apt_snapshot"):
+            # 이웃이 사람 손으로 업그레이드(full-upgrade)한 것은 디코이 unattended(보안만)로는 재현 안 됨 — 디코이에 로그인하면 흔적이 남음
+            print(f"  ! 이웃이 직접 업그레이드함 — {n}의 보안 외 패키지는 이웃보다 뒤짐(한계: 디코이 로그인 없이 재현 불가)")
+
+
 def whois(value):
     """active·paused·retired 모두 — 교체된 옛 미끼가 쓰이면 유출 시점을 좁힐 수 있다"""
     hit = False
@@ -789,6 +817,9 @@ def main():
     sp.add_parser("collect").set_defaults(f=lambda a: collect())
     for n, f in (("plan", cmd_plan), ("apply", cmd_apply), ("verify", cmd_verify), ("list", cmd_list)):
         sp.add_parser(n).set_defaults(f=f)
+    rb = sp.add_parser("reblend", help="이웃 패치 시점이 바뀌었으면 투영 디코이 미러 시점을 맞춤(주기적으로 실행)")
+    rb.add_argument("--no-collect", action="store_true")
+    rb.set_defaults(f=lambda a: reblend(not a.no_collect))
     wh = sp.add_parser("whois", help="경보에 나온 값(키 지문·DB 계정·AWS 키 ID)이 어느 미끼인지 — 서버 밖에서 레지스트리로(서버엔 미끼 목록을 두지 않음)")
     wh.add_argument("value")
     wh.set_defaults(f=lambda a: whois(a.value))

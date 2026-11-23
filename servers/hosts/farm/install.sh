@@ -9,6 +9,9 @@
 set -euo pipefail
 SENSOR_PUB=${1:?센서 공개키}; T_OUT=120; PERSIST=${PERSIST:?PERSIST=true|false}
 NOTIFY_URL=${NOTIFY_URL:?NOTIFY_URL(환경 프로필 notify.farm_webhook_url)}; NOTIFY_FORMAT=${NOTIFY_FORMAT:-json}
+# 디코이 apt 요청을 시점 고정 미러로(재블렌딩, 환경 프로필 guest.mirror_intercept): "주소:포트"(로컬 — 디코이의 apt 프록시) / "*:80"(AWS — 투명)
+MIRROR_INTERCEPT=${MIRROR_INTERCEPT:?MIRROR_INTERCEPT}
+case $MIRROR_INTERCEPT in "*:"*) MATCH="tcp dport ${MIRROR_INTERCEPT#*:}" ;; *) MATCH="ip daddr ${MIRROR_INTERCEPT%:*} tcp dport ${MIRROR_INTERCEPT#*:}" ;; esac
 HERE=$(cd "$(dirname "$0")" && pwd)
 export DEBIAN_FRONTEND=noninteractive
 dpkg -s wireguard-tools systemd-container >/dev/null 2>&1 || apt-get install -y -q wireguard-tools systemd-container
@@ -46,6 +49,9 @@ PostUp = iptables -w -n -L DOCKER-USER >/dev/null 2>&1 && for x in "-i %i" "-o %
 # relay-notify가 읽어 경보. 터널과 같이 생기고 같이 사라진다(투영 끔 = 흔적 없음)
 PostUp = nft -f - <<< "table ip proj_watch { chain watch_in { type filter hook forward priority -1; policy accept; iifname \"%i\" ct state new limit rate 20/second log prefix \"PROJ-IN \"; }; }"
 PreDown = nft delete table ip proj_watch 2>/dev/null || true
+# 디코이의 apt 요청 → 시점 고정 미러(relay-mirror, 탭 주소 169.254.31.2:3144). 이웃과 같은 스냅숏만 보임 — 디코이는 자기 unattended-upgrades로 따라감
+PostUp = nft -f - <<< "table ip proj_mirror { chain pre { type nat hook prerouting priority dstnat; policy accept; iifname \"ve-*\" $MATCH dnat to 169.254.31.2:3144; }; }"
+PreDown = nft delete table ip proj_mirror 2>/dev/null || true
 
 [Peer]
 PublicKey = $SENSOR_PUB
@@ -56,6 +62,7 @@ chmod 600 /etc/wireguard/relay.conf
 # 팜 경보 데몬 — 같은 moa-notify 코드, 투영 감시만. relay와 수명을 같이(Wants·PartOf)
 install -d -m 0755 /usr/local/lib/relay; install -d -m 0700 /etc/relay /var/lib/relay-notify
 install -m 0644 "$HERE/../../detection/moa-notify/moa_notify.py" /usr/local/lib/relay/notify.py
+install -m 0644 "$HERE/guest/mirror.py" /usr/local/lib/relay/mirror.py
 cat > /etc/relay/notify.json <<EOF
 {"hostname": "farm", "webhook_url": "$NOTIFY_URL", "format": "$NOTIFY_FORMAT", "max_per_minute": 30, "poll_seconds": 0.5,
  "state_file": "/var/lib/relay-notify/state.json",
@@ -71,12 +78,21 @@ PartOf=wg-quick@relay.service
 ExecStart=/usr/bin/python3 /usr/local/lib/relay/notify.py --config /etc/relay/notify.json
 Restart=on-failure
 EOF
+cat > /etc/systemd/system/relay-mirror.service <<'EOF'
+[Unit]
+Description=relay mirror
+After=wg-quick@relay.service
+PartOf=wg-quick@relay.service
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/relay/mirror.py --bind 169.254.31.2 --port 3144 --env-dir /etc/guest
+Restart=on-failure
+EOF
 install -d /etc/systemd/system/wg-quick@relay.service.d
-printf '[Unit]\nWants=relay-notify.service\n' > /etc/systemd/system/wg-quick@relay.service.d/notify.conf
+printf '[Unit]\nWants=relay-notify.service relay-mirror.service\n' > /etc/systemd/system/wg-quick@relay.service.d/notify.conf
 systemctl daemon-reload
 if [ "$PERSIST" = true ]; then systemctl enable wg-quick@relay >/dev/null 2>&1; else systemctl disable wg-quick@relay >/dev/null 2>&1 || true; fi
 systemctl restart wg-quick@relay
-systemctl restart relay-notify
+systemctl restart relay-notify relay-mirror
 
 # networkd는 기본값으로 자기가 만들지 않은 정책 규칙·경로를 지운다(wg-quick PostUp 규칙이 사라짐 — 11/22 재부팅 시험).
 # networkd를 쓰는 팜(AWS)에서만 — WSL2는 networkd가 없다(켜면 WSL의 eth0·규칙과 부딪힘)

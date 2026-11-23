@@ -52,6 +52,16 @@ def name_for(prefix, names):
     return f"{prefix}-{k:0{w}d}", w
 
 
+def segment_platform(ctxs, conf, lan, segment):
+    """그 구간 이웃의 패치 이력 기준값(재블렌딩용 — plan과 같은 규칙)"""
+    seg = segments(ctxs, lan, conf["tiers"]).get(ipaddress.ip_network(segment), [])
+    plats = [m["platform"] for m in seg] or [c.get("platform", {}) for c in ctxs.values()]
+    return {"kernel": majority(p.get("kernel") for p in plats),
+            "apt_snapshot": majority(p.get("apt_snapshot") for p in plats),
+            "apt_snapshot_security": majority(p.get("apt_snapshot_security") for p in plats),
+            "apt_manual_upgrade": majority(p.get("apt_manual_upgrade") for p in plats)}
+
+
 def plan(ctxs, conf, lan, taken_addrs=(), taken_names=(), placed=()):
     tiers = conf["tiers"]
     seg = segments(ctxs, lan, tiers)
