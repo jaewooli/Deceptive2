@@ -165,9 +165,6 @@ class NotifierTest(unittest.TestCase):
             srv.shutdown()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class NotifierBadUrlTest(unittest.TestCase):
     """11/23: web-01 설정의 웹훅이 채워지지 않은 템플릿 값('{{ webhook_url }}')이라 경보 순간 ValueError로 데몬이 죽어 재시작 반복"""
@@ -176,6 +173,87 @@ class NotifierBadUrlTest(unittest.TestCase):
         n = mn.Notifier({"webhook_url": "{{ webhook_url }}", "format": "json"})
         with self.assertLogs(mn.log, level="ERROR"):
             n.send({"host": "web-01", "source": "test", "result": "x"})
+
+
+
+class SshSessionsTest(unittest.TestCase):
+    """디코이 SSH 목적지 탐지(11/23) — OpenSSH 9.6, LogLevel VERBOSE 로그 형식"""
+
+    def feed(self, lines):
+        w = mn.SshSessions({}, "lt-decoy")
+        out = []
+        for l in lines:
+            out += w.feed(l)
+        return out
+
+    def test_bait_key_login_alerts_immediately_with_fingerprint(self):
+        ev = self.feed([
+            "2026-11-23T21:00:00.1+09:00 lt-decoy sshd[100]: Connection from 10.0.21.11 port 40000 on 10.0.20.15 port 22 rdomain \"\"",
+            "2026-11-23T21:00:00.2+09:00 lt-decoy sshd[100]: Accepted key ED25519 SHA256:AAA found at /backup/.ssh/authorized_keys:2",
+            "2026-11-23T21:00:00.3+09:00 lt-decoy sshd[100]: Accepted publickey for backup from 10.0.21.11 port 40000 ssh2: ED25519 SHA256:AAA"])
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["client"], "10.0.21.11:40000")
+        self.assertEqual(ev[0]["user"], "backup")
+        self.assertIn("SHA256:AAA", ev[0]["result"])
+        self.assertTrue(ev[0]["result"].startswith("로그인 성공"))
+
+    def test_retired_key_failure_carries_fingerprint(self):
+        ev = self.feed([
+            "2026-11-23T21:00:00.1+09:00 lt-decoy sshd[200]: Connection from 10.0.21.11 port 40001 on 10.0.20.15 port 22 rdomain \"\"",
+            "2026-11-23T21:00:00.2+09:00 lt-decoy sshd[200]: Failed publickey for backup from 10.0.21.11 port 40001 ssh2: ED25519 SHA256:OLD",
+            "2026-11-23T21:00:00.3+09:00 lt-decoy sshd[200]: Connection closed by authenticating user backup 10.0.21.11 port 40001 [preauth]"])
+        self.assertEqual(len(ev), 1)
+        self.assertIn("SHA256:OLD", ev[0]["result"])
+        self.assertTrue(ev[0]["result"].startswith("인증 실패"))
+
+    def test_lines_after_login_are_not_new_events(self):
+        ev = self.feed([
+            "2026-11-23T21:00:00.1+09:00 lt-decoy sshd[400]: Connection from 10.0.21.11 port 40003 on 10.0.20.15 port 22 rdomain \"\"",
+            "2026-11-23T21:00:00.3+09:00 lt-decoy sshd[400]: Accepted publickey for backup from 10.0.21.11 port 40003 ssh2: ED25519 SHA256:AAA",
+            "2026-11-23T21:00:01.0+09:00 lt-decoy sshd[400]: Received disconnect from 10.0.21.11 port 40003:11: disconnected by user",
+            "2026-11-23T21:00:01.0+09:00 lt-decoy sshd[400]: Disconnected from user backup 10.0.21.11 port 40003"])
+        self.assertEqual(len(ev), 1)
+
+    def test_user_child_pid_lines_belong_to_login(self):
+        """실제 로그(11/23 디코이): 로그인 뒤 종료 줄은 사용자 자식 pid에서 나온다"""
+        ev = self.feed([
+            'x lt-decoy sshd[9848]: Connection from 10.0.21.11 port 48824 on 10.0.20.15 port 22 rdomain ""',
+            "x lt-decoy sshd[9848]: Postponed publickey for backup from 10.0.21.11 port 48824 ssh2 [preauth]",
+            "x lt-decoy sshd[9848]: Accepted publickey for backup from 10.0.21.11 port 48824 ssh2: ED25519 SHA256:AAA",
+            "x lt-decoy sshd[9848]: User child is on pid 9911",
+            "x lt-decoy sshd[9911]: Received disconnect from 10.0.21.11 port 48824:11: disconnected by user",
+            "x lt-decoy sshd[9911]: Disconnected from user backup 10.0.21.11 port 48824"])
+        self.assertEqual(len(ev), 1)
+
+    def test_banner_grab_is_one_event(self):
+        ev = self.feed([
+            "2026-11-23T21:00:00.1+09:00 lt-decoy sshd[300]: Connection from 10.0.21.11 port 40002 on 10.0.20.15 port 22 rdomain \"\"",
+            "2026-11-23T21:00:00.2+09:00 lt-decoy sshd[300]: Connection closed by 10.0.21.11 port 40002 [preauth]"])
+        self.assertEqual([e["result"] for e in ev], ["인증 전 끊김"])
+
+    def test_unrelated_lines_ignored(self):
+        self.assertEqual(self.feed(["2026-11-23T21:00:00+09:00 lt-decoy sshd[1]: Server listening on 0.0.0.0 port 22."]), [])
+
+
+class ProjectionInTest(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        open(os.path.join(self.d, "stg-01.env"), "w").write("ADDR=10.0.21.12/24\nMEM=1024\n")
+        self.w = mn.ProjectionIn({"guest_env_dir": self.d}, "farm")
+
+    def test_tcp_new_connection_names_decoy(self):
+        ev = self.w.feed("2026-11-23T21:30:00.000+09:00 farm kernel: PROJ-IN IN=relay OUT=ve-stg-01 SRC=10.0.21.11 DST=10.0.21.12 "
+                         "LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=1 DF PROTO=TCP SPT=40000 DPT=22 WINDOW=64240 RES=0x00 SYN URGP=0")
+        self.assertEqual(ev[0]["client"], "10.0.21.11:40000")
+        self.assertIn("stg-01(10.0.21.12:22/TCP)", ev[0]["result"])
+
+    def test_icmp_without_ports(self):
+        ev = self.w.feed("2026-11-23T21:30:00.000+09:00 farm kernel: PROJ-IN IN=relay OUT=ve-stg-01 SRC=10.0.20.10 DST=10.0.21.12 "
+                         "LEN=84 TOS=0x00 PREC=0x00 TTL=64 ID=1 DF PROTO=ICMP TYPE=8 CODE=0 ID=5 SEQ=1")
+        self.assertIn("stg-01(10.0.21.12/ICMP)", ev[0]["result"])
+
+    def test_other_prefix_ignored(self):
+        self.assertEqual(self.w.feed("2026-11-23T21:30:00+09:00 farm kernel: IN-FWD SRC=1.1.1.1 DST=2.2.2.2 PROTO=TCP SPT=1 DPT=2"), [])
 
 
 if __name__ == "__main__":

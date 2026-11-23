@@ -41,8 +41,12 @@ def write(p, text, op):
     if old:
         os.chown(tmp, old.st_uid, old.st_gid)
         os.chmod(tmp, mode if mode is not None else old.st_mode & 0o7777)
+    d = os.path.dirname(p) or "."
+    dst = os.stat(d)
     os.replace(tmp, p)
     finish(p, op)
+    # 임시 파일 + 바꿔치기는 상위 디렉터리 시각을 오늘로 바꾼다 → 되돌림(11/23: 디코이 /backup/.ssh가 오늘 시각 — "버려진 서버" 서사와 충돌)
+    os.utime(d, ns=(dst.st_atime_ns, dst.st_mtime_ns))
 
 
 def finish(p, op):
@@ -325,6 +329,21 @@ def do(op, mode):
         os.replace(tmp, p)
         subprocess.run(["systemctl", "restart", "moa-notify"], check=True)
         return "changed"
+    if k == "moa_set":
+        # 공통 데몬 설정의 최상위 값(웹훅 주소·형식)을 환경 프로필 값으로 — 세 서버 같은 값(11/23: 서버마다 달랐음)
+        import subprocess
+        p = "/etc/moa-notify/config.json"
+        cfg = json.load(open(p))
+        if all(cfg.get(key) == v for key, v in op["values"].items()):
+            return "ok"
+        if mode == "check":
+            return "drift"
+        cfg.update(op["values"])
+        tmp = p + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.write(fd, json.dumps(cfg, ensure_ascii=False, indent=1).encode()); os.close(fd)
+        os.replace(tmp, p)
+        subprocess.run(["systemctl", "restart", "moa-notify"], check=True)
+        return "changed"
     if k == "moa_watch":
         # 공통 데몬 설정에서 감시 항목 하나를 켜고 끈다(벤더 기술 스위치 — 예: Attivo 페이로드 관문 gate). 다른 항목·웹훅은 그대로 → 다시 시작
         # 끄면 데몬이 시작할 때 그 항목이 남긴 커널 규칙을 지운다(moa_notify teardown)
@@ -332,6 +351,10 @@ def do(op, mode):
         p = "/etc/moa-notify/config.json"
         cfg = json.load(open(p))
         w = cfg.get("watch", {}).get(op["watch"])
+        if w is None and op.get("cfg"):   # 없으면 같은 모양으로 추가(세 서버 설정 모양 통일)
+            if mode == "check":
+                return "drift"
+            w = cfg.setdefault("watch", {})[op["watch"]] = dict(op["cfg"], enabled=not op["enabled"])
         if w is None:
             DATA["error"] = f"감시 항목 없음: {op['watch']}"
             return "failed"

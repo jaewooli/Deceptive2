@@ -16,6 +16,11 @@ hosts:
   db-backup-01: {group: decoys, instance_id: ~, ip: ~}
   sensor: {group: sensors, instance_id: ~}
   farm: {group: farms, instance_id: ~}
+notify:
+  webhook_url: ~               # 실제 웹훅(Discord/Slack) — 비밀값이라 배포 때 주입, 저장소엔 안 둠
+  farm_webhook_url: ~
+  format: discord
+
 farm:
   tunnel_endpoint: ~           # 팜 서브넷(10.0.3.0/24) 주소
   persist: true                # 재부팅 뒤 자동으로 살아나야 함

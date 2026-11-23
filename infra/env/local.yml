@@ -26,6 +26,12 @@ hosts:
   router: {group: lab, port: 2236}           # 로컬 전용(VPC 라우터 흉내)
   farm: {group: farms, connection: local}    # WSL2 = 팜(3중 중첩 회피, 11/23)
 
+# 경보 수신(moa-notify 웹훅) — 로컬은 호스트의 수신기(infra/local-vm/webhook_sink.py, lab.sh가 띄움, 받은 것은 ~/.cache/deceptive2-vm/webhook.jsonl)
+notify:
+  webhook_url: http://10.0.2.2:9099/      # 랩 VM에서 본 호스트
+  farm_webhook_url: http://127.0.0.1:9099/ # 팜(WSL2)에서 본 호스트
+  format: json
+
 farm:
   # 센서·EDH가 터널을 거는 팜 주소 — VM에서 본 WSL2(QEMU 사용자망). AWS는 팜 서브넷 주소
   tunnel_endpoint: 10.0.2.2

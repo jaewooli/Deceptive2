@@ -8,6 +8,8 @@
 # 키: 처음 실행 때 /etc/wireguard/relay.key를 만들고 공개키를 출력한다(저장소에 넣지 않음)
 set -euo pipefail
 SENSOR_PUB=${1:?센서 공개키}; T_OUT=120; PERSIST=${PERSIST:?PERSIST=true|false}
+NOTIFY_URL=${NOTIFY_URL:?NOTIFY_URL(환경 프로필 notify.farm_webhook_url)}; NOTIFY_FORMAT=${NOTIFY_FORMAT:-json}
+HERE=$(cd "$(dirname "$0")" && pwd)
 export DEBIAN_FRONTEND=noninteractive
 dpkg -s wireguard-tools systemd-container >/dev/null 2>&1 || apt-get install -y -q wireguard-tools systemd-container
 
@@ -40,6 +42,10 @@ PostUp = iptables -w -t mangle -C PREROUTING -i %i -j TTL --ttl-inc 1 2>/dev/nul
 PostUp = iptables -w -t mangle -C PREROUTING -i ve-+ -j TTL --ttl-inc 1 2>/dev/null || iptables -w -t mangle -A PREROUTING -i ve-+ -j TTL --ttl-inc 1
 # Docker가 있는 팜(WSL2)은 FORWARD 기본 정책이 DROP일 수 있다 → 팜 인터페이스끼리만 허용(DOCKER-USER는 Docker 규칙보다 먼저 봄)
 PostUp = iptables -w -n -L DOCKER-USER >/dev/null 2>&1 && for x in "-i %i" "-o %i" "-i ve-+" "-o ve-+" "-i edh+" "-o edh+"; do iptables -w -C DOCKER-USER \$x -j ACCEPT 2>/dev/null || iptables -w -I DOCKER-USER \$x -j ACCEPT; done; true
+# 팜 쪽 탐지(Acalvio — 디코이 밖에서, 11/23 특허 원문 확인): 터널에서 디코이로 넘어가는 새 연결을 커널 로그로(초당 20개 한도 — 스캔에 넘치지 않게).
+# relay-notify가 읽어 경보. 터널과 같이 생기고 같이 사라진다(투영 끔 = 흔적 없음)
+PostUp = nft -f - <<< "table ip proj_watch { chain watch_in { type filter hook forward priority -1; policy accept; iifname \"%i\" ct state new limit rate 20/second log prefix \"PROJ-IN \"; }; }"
+PreDown = nft delete table ip proj_watch 2>/dev/null || true
 
 [Peer]
 PublicKey = $SENSOR_PUB
@@ -47,8 +53,30 @@ PublicKey = $SENSOR_PUB
 AllowedIPs = 0.0.0.0/0
 EOF
 chmod 600 /etc/wireguard/relay.conf
+# 팜 경보 데몬 — 같은 moa-notify 코드, 투영 감시만. relay와 수명을 같이(Wants·PartOf)
+install -d -m 0755 /usr/local/lib/relay; install -d -m 0700 /etc/relay /var/lib/relay-notify
+install -m 0644 "$HERE/../../detection/moa-notify/moa_notify.py" /usr/local/lib/relay/notify.py
+cat > /etc/relay/notify.json <<EOF
+{"hostname": "farm", "webhook_url": "$NOTIFY_URL", "format": "$NOTIFY_FORMAT", "max_per_minute": 30, "poll_seconds": 0.5,
+ "state_file": "/var/lib/relay-notify/state.json",
+ "watch": {"projection": {"enabled": true, "path": "/var/log/kern.log", "prefix": "PROJ-IN", "guest_env_dir": "/etc/guest"}}}
+EOF
+chmod 600 /etc/relay/notify.json
+cat > /etc/systemd/system/relay-notify.service <<'EOF'
+[Unit]
+Description=relay notify
+After=wg-quick@relay.service
+PartOf=wg-quick@relay.service
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/lib/relay/notify.py --config /etc/relay/notify.json
+Restart=on-failure
+EOF
+install -d /etc/systemd/system/wg-quick@relay.service.d
+printf '[Unit]\nWants=relay-notify.service\n' > /etc/systemd/system/wg-quick@relay.service.d/notify.conf
+systemctl daemon-reload
 if [ "$PERSIST" = true ]; then systemctl enable wg-quick@relay >/dev/null 2>&1; else systemctl disable wg-quick@relay >/dev/null 2>&1 || true; fi
 systemctl restart wg-quick@relay
+systemctl restart relay-notify
 
 # networkd는 기본값으로 자기가 만들지 않은 정책 규칙·경로를 지운다(wg-quick PostUp 규칙이 사라짐 — 11/22 재부팅 시험).
 # networkd를 쓰는 팜(AWS)에서만 — WSL2는 networkd가 없다(켜면 WSL의 eth0·규칙과 부딪힘)

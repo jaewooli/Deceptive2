@@ -15,6 +15,10 @@ hits=$(grep -rnE '10\.0\.(2|20|21)\.[0-9]+' servers baits --include='*.sh' --inc
 hits=$(grep -rnE 'ip rule (del|delete) .*pref 0|ip rule add .*lookup local' servers infra/local-vm || true)
 [ -z "$hits" ] && say ✓ "local 규칙(pref 0)을 옮기는 코드 없음" || { say ✗ "local 규칙 이동:"; echo "$hits" | sed 's/^/    /'; }
 
+# 2-1. nft 예약어를 체인 이름으로 쓰지 않기(11/23 두 번: `chain fwd`가 문법 오류 → 라우터 설정 실패, 팜 relay가 안 올라옴)
+hits=$(grep -rnE 'chain (fwd|dup|tproxy|log|limit|reject|counter|queue|meta|ct) ' servers infra --include='*.sh' --include='*.py' || true)
+[ -z "$hits" ] && say ✓ "nft 체인 이름에 예약어 없음" || { say ✗ "nft 예약어 체인 이름:"; echo "$hits" | sed 's/^/    /'; }
+
 # 3. 셸 문법 + (있으면) shellcheck 오류 수준
 for f in $(git ls-files '*.sh' servers/hosts/farm/guest/guest-up); do
   bash -n "$f" 2>/dev/null || say ✗ "문법: $f"

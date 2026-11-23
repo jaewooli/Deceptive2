@@ -211,6 +211,91 @@ def _is_conn_related(msg):
             or any(p.match(msg) for p, _ in PG_RESULT))
 
 
+# ---------------------------------------------------------------- SSH 접속(디코이 목적지 탐지, 11/23)
+SSH_LINE = re.compile(r"^(?P<ts>\S+) \S+ sshd\[(?P<pid>\d+)\]: (?P<msg>.*)$")
+SSH_RULES = [   # (정규식, 처리) — OpenSSH 9.6. 키 지문은 LogLevel VERBOSE에서 실패 시도에도 남는다(공통 베이스)
+    (re.compile(r"^Connection from (?P<ip>\S+) port (?P<port>\d+) on "), "conn"),
+    (re.compile(r"^Accepted (?P<method>\S+) for (?P<user>\S+) from (?P<ip>\S+) port (?P<port>\d+) ssh2(?:: (?P<kt>\S+) (?P<fp>SHA256:\S+))?"), "ok"),
+    (re.compile(r"^Failed (?P<method>\S+) for (?:invalid user )?(?P<user>\S+) from (?P<ip>\S+) port (?P<port>\d+) ssh2(?:: (?P<kt>\S+) (?P<fp>SHA256:\S+))?"), "fail"),
+    (re.compile(r"^Postponed publickey for (?P<user>\S+) from (?P<ip>\S+) port (?P<port>\d+)"), "try"),
+    (re.compile(r"^Invalid user (?P<user>\S*) from (?P<ip>\S+) port (?P<port>\d+)"), "invalid"),
+    (re.compile(r"^Connection closed by (?:(?:authenticating|invalid) user (?P<user>\S*) )?(?P<ip>\S+) port (?P<port>\d+) \[preauth\]"), "closed"),
+    (re.compile(r"^(?:Disconnected from|Received disconnect from|Connection reset by) "), "end"),
+]
+
+
+class SshSessions:
+    """디코이 sshd 로그에서 접속 하나(sshd 자식 pid)를 알림 하나로. 디코이는 정상 업무에서 아무도 안 들어오므로 모든 접속이 신호.
+    시도한 키 지문을 같이 보낸다 — 지문 → 어느 미끼인지는 서버 밖(미끼 엔진 whois)에서(서버에 미끼 목록을 두지 않음)"""
+
+    name = "sshd"
+
+    def __init__(self, cfg, host):
+        self.host = host
+        self.settle = float(cfg.get("settle_seconds", 3))
+        self.s = {}
+        self.finished = {}   # 알린 pid → 시각. 같은 접속의 뒤따르는 줄(종료 등)은 다시 알리지 않음(11/23: 로그인 성공 뒤 종료 줄이 '알 수 없음' 경보로)
+
+    def feed(self, line):
+        m = SSH_LINE.match(line)
+        if not m:
+            return []
+        pid, msg = m["pid"], m["msg"]
+        # 로그인 뒤 OpenSSH는 세션을 사용자 자식 pid로 넘긴다("User child is on pid N") — 종료 줄은 그 pid에서 나온다(11/23 실측)
+        if (c := re.match(r"^User child is on pid (\d+)", msg)):
+            if pid in self.finished:
+                self.finished[c.group(1)] = time.monotonic()
+            return []
+        for rx, kind in SSH_RULES:
+            r = rx.match(msg)
+            if not r:
+                continue
+            if kind == "conn":
+                self.finished.pop(pid, None)   # pid 재사용 — 새 접속
+            elif pid in self.finished:
+                return []
+            s = self.s.setdefault(pid, {"ts": m["ts"], "client": None, "user": None, "fps": [], "result": None,
+                                        "lines": [], "last": time.monotonic()})
+            s["lines"].append(line)
+            s["last"] = time.monotonic()
+            g = r.groupdict()
+            if g.get("ip"):
+                s["client"] = s["client"] or f"{g['ip']}:{g['port']}"
+            if g.get("user"):
+                s["user"] = s["user"] or g["user"]
+            if g.get("fp") and g["fp"] not in s["fps"]:
+                s["fps"].append(g["fp"])
+            if kind == "ok":
+                s["result"] = f"로그인 성공({g['method']})"
+                return self._finish(pid)      # 로그인 성공은 바로 알린다
+            if kind == "fail":
+                s["result"] = f"인증 실패({g['method']})"
+            elif kind == "invalid":
+                s["result"] = "없는 계정"
+            elif kind in ("closed", "end"):
+                s["result"] = s["result"] or "인증 전 끊김"
+                return self._finish(pid)
+            return []
+        return []
+
+    def tick(self):
+        now = time.monotonic()
+        for pid in [p for p, t in self.finished.items() if now - t > 3600]:
+            del self.finished[pid]
+        out = []
+        for pid in [p for p, s in self.s.items() if now - s["last"] >= self.settle]:
+            self.s[pid]["result"] = self.s[pid]["result"] or "접속(결과 기록 없음)"
+            out += self._finish(pid)
+        return out
+
+    def _finish(self, pid):
+        s = self.s.pop(pid)
+        self.finished[pid] = time.monotonic()
+        return [{"host": self.host, "source": self.name, "client": s["client"] or "알 수 없음", "user": s["user"],
+                 "database": None, "result": s["result"] + (f" 키 {', '.join(s['fps'])}" if s["fps"] else ""),
+                 "log_ts": s["ts"], "pid": pid, "lines": s["lines"][-6:]}]
+
+
 # ---------------------------------------------------------------- 안 쓰는 포트로 온 연결(전달 규칙)
 RE_KLOG = re.compile(r"^(?P<ts>\S+) \S+ kernel: (?:\[[\d. ]+\] )?(?P<prefix>\S+) .*?SRC=(?P<src>\S+) DST=(?P<dst>\S+) .*?PROTO=TCP SPT=(?P<spt>\d+) DPT=(?P<dpt>\d+)")
 
@@ -552,7 +637,47 @@ def format_text(ev):
 
 
 # ---------------------------------------------------------------- 실행
-WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate}
+# ---------------------------------------------------------------- 투영 디코이로 들어온 새 연결(팜 쪽 — Acalvio: 탐지는 디코이 밖, 11/23)
+RE_PROJ = re.compile(r"^(?P<ts>\S+) \S+ kernel: (?:\[[\d. ]+\] )?(?P<prefix>\S+) .*?SRC=(?P<src>\S+) DST=(?P<dst>\S+) .*?PROTO=(?P<proto>\S+)"
+                     r"(?:.*? SPT=(?P<spt>\d+) DPT=(?P<dpt>\d+))?")
+
+
+class ProjectionIn:
+    """팜이 relay 터널에서 디코이로 넘기는 새 연결(nft log, 접두 cfg.prefix)을 알린다. 디코이는 정상 업무에서 아무도 안 쓰므로
+    모든 접근이 신호(Acalvio 특허 US9756075: "any access ... to the security mechanism is automatically suspect").
+    디코이 안 데몬과 달리 공격자가 디코이를 장악해도 끌 수 없다. 투영 주소 → 디코이 이름은 팜의 /etc/guest/*.env에서"""
+
+    name = "projection"
+
+    def __init__(self, cfg, host):
+        self.host = host
+        self.prefix = cfg.get("prefix", "PROJ-IN")
+        self.env_dir = cfg.get("guest_env_dir", "/etc/guest")
+
+    def decoy(self, ip):
+        import glob
+        for f in glob.glob(os.path.join(self.env_dir, "*.env")):
+            try:
+                if any(l.strip() == f"ADDR={ip}" or l.startswith(f"ADDR={ip}/") for l in open(f)):
+                    return os.path.basename(f)[:-4]
+            except OSError:
+                pass
+        return ip
+
+    def feed(self, line):
+        m = RE_PROJ.match(line)
+        if not m or m["prefix"] != self.prefix:
+            return []
+        port = f":{m['dpt']}" if m["dpt"] else ""
+        return [{"host": self.host, "source": "투영", "client": m["src"] + (f":{m['spt']}" if m["spt"] else ""), "user": None,
+                 "database": None, "result": f"{self.decoy(m['dst'])}({m['dst']}{port}/{m['proto']}) 새 연결", "log_ts": m["ts"],
+                 "lines": [line.split(" kernel: ", 1)[-1][:300]]}]
+
+    def tick(self):
+        return []
+
+
+WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate, "sshd": SshSessions, "projection": ProjectionIn}
 
 
 def load_state(path):

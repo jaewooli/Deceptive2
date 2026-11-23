@@ -156,3 +156,13 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - 스위치마다 끄고 켜기 시험 통과(11/23). 고친 결함: moa-notify가 끈 감시(관문·트랩 중계)의 커널 규칙을 남김 → 시작 때 정리(우리 흔적이 있을 때만 — fail-safe), 엔진 unit 작업이 파일을 바꿔도 재시작 안 함 → ctime 비교로 재시작
 - `lab.sh up`은 VM을 동시에 켬(하나씩 → 동시, 출력은 VM 순서대로)
 - WSL이 저녁에 재시작됨(원인 Windows 쪽) → 설계대로 디스크·레지스트리만 남고 깨끗이 내려감 → `lab.sh up all` + `farm-host.sh up`으로 복구, 검사 통과
+- **11/23 밤 결정(사용자)**: 로컬 관리 접속 경보 소음은 그대로 두고 11/30 오탐 단계에서 / 경보 수신기(webhook_sink) 연결·웹훅 통일을 지금(원래 11/27) / 디코이 이후 업데이트 = **주기적 재블렌딩**(이웃 apt 이력이 바뀌면 팜이 꺼진 디스크에서 같은 스냅숏으로 — 디코이에 바깥 길을 열지 않음)
+
+## 14. 11/23 밤 — 디코이 목적지 탐지(원래 11/25) + 경보 수신
+- **경보 수신기**: `lab.sh`가 호스트에 `webhook_sink.py`(127.0.0.1:9099 → `~/.cache/deceptive2-vm/webhook.jsonl`)를 띄움. 웹훅은 환경 프로필 `notify`(랩 VM은 10.0.2.2:9099, 팜은 127.0.0.1:9099). `engine.py notify-config`로 세 서버 통일(HANDOFF 4절 7번 해결)
+- **디코이 SSH 탐지**: moa-notify `sshd` 감시(auth.log, 접속 하나 = 경보 하나 — 로그인 뒤 OpenSSH가 세션을 "User child is on pid N"으로 넘기는 것까지 묶음), 시도한 키 지문 포함. 디코이만 켬(회사 서버는 같은 모양으로 꺼 둠). 공통 베이스 `LogLevel VERBOSE`(`base/install.sh ssh` — 실패한 키 지문도 남김)
+- **지문 → 미끼**: `engine.py whois <값>` — 서버 밖에서 레지스트리로(active·paused·retired)
+- **팜 쪽 탐지(Acalvio)**: relay PostUp nft `proj_watch`(새 연결 로그, 초당 20) + 팜 `relay-notify`(같은 코드, `projection` 감시 — 디코이 이름·진짜 출발지). relay와 수명 같음(Wants·PartOf). 투영 디코이 안 moa-notify는 바깥 길이 없어 경보를 못 보냄 → 탐지는 팜(설계대로)
+- **탐지 검사** `infra/checks/detect.py`(farm-host check에 포함): 5경로(디코이 DB·SSH 미끼 키·투영 stg·dev·트랩) 모두 0.6~1.4초(기준 60초)
+- 고친 것: 디코이 `/backup/.ssh` 디렉터리 시각이 미끼 재기록 때 오늘로 바뀜 → 적용기가 상위 디렉터리 시각 보존, nft 예약어 체인(`fwd`) 정적 검사
+- 남은 일: 주기적 재블렌딩(사용자 결정), 디코이 세션 명령 첨부(11/27 계획), 출발지 포렌식(11/27), 관리 접속 소음 억제(11/30)

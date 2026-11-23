@@ -216,6 +216,28 @@ def role_extras(a):
     return {}, []
 
 
+def whois(value):
+    """active·paused·retired 모두 — 교체된 옛 미끼가 쓰이면 유출 시점을 좁힐 수 있다"""
+    hit = False
+    for pid, p in load_reg()["placements"].items():
+        if p["ident"].get("value") == value:
+            hit = True
+            print(f"{pid} {p['type']} {p['host']} 상태={p['status']} 만든 때={p['created']}"
+                  + (f" 교체됨={p.get('retired')}" if p.get("retired") else "") + f" 자리={p['anchor_key']}")
+    if not hit:
+        print("레지스트리에 없음 — 미끼가 아닌 값(정상 계정·관리 키이거나 공격자 자신의 것)")
+
+
+def notify_config():
+    """세 서버 moa-notify: 웹훅 = 환경 프로필, SSH 감시(sshd)는 디코이만 켬(정상 업무에서 아무도 안 들어옴), 회사 서버엔 같은 모양으로 꺼 둠"""
+    n = dests()["notify"]
+    sshd = {"path": "/var/log/auth.log", "settle_seconds": 3}
+    for h in inventory().get("company", []) + inventory().get("decoys", []):
+        st, _ = one(h, [{"kind": "moa_set", "values": {"webhook_url": n["webhook_url"], "format": n.get("format", "json")}},
+                        {"kind": "moa_watch", "watch": "sshd", "enabled": h in inventory().get("decoys", []), "cfg": sshd}])
+        print(h, st)
+
+
 def decoy_agent_files(a):
     """디코이 안 moa-notify: 같은 구간 회사 서버의 설정을 그대로(웹훅·형식·감시 항목 모양), 주소만 디코이 것, 트랩 중계(ports)는 끔"""
     d = dests()
@@ -767,6 +789,11 @@ def main():
     sp.add_parser("collect").set_defaults(f=lambda a: collect())
     for n, f in (("plan", cmd_plan), ("apply", cmd_apply), ("verify", cmd_verify), ("list", cmd_list)):
         sp.add_parser(n).set_defaults(f=f)
+    wh = sp.add_parser("whois", help="경보에 나온 값(키 지문·DB 계정·AWS 키 ID)이 어느 미끼인지 — 서버 밖에서 레지스트리로(서버엔 미끼 목록을 두지 않음)")
+    wh.add_argument("value")
+    wh.set_defaults(f=lambda a: whois(a.value))
+    nc = sp.add_parser("notify-config", help="세 서버(회사·디코이) moa-notify 웹훅을 환경 프로필 값으로 통일")
+    nc.set_defaults(f=lambda a: notify_config())
     ap_ = sp.add_parser("decoy-agent", help="이미 만든 투영 디코이에 moa-notify(회사 표준 구성) 넣기")
     ap_.add_argument("template")
     ap_.set_defaults(f=lambda a: install_decoy_agent(load_reg(), next(pid for pid, p in load_reg()["placements"].items()

@@ -47,7 +47,14 @@ base() {
   install -d /etc/systemd/networkd.conf.d
   printf '[Network]\nManageForeignRoutingPolicyRules=no\nManageForeignRoutes=no\n' > /etc/systemd/networkd.conf.d/10-keep-foreign.conf
 
+  ssh
   agents
+}
+
+# sshd 로그 수준(세 서버 공통 — 디코이만 다르면 단서). sshd는 같은 항목의 처음 값을 쓰고, 조각은 본문 앞에서 읽힌다
+ssh() {
+  install -m 0644 ssh/50-loglevel.conf /etc/ssh/sshd_config.d/50-loglevel.conf
+  sshd -t && systemctl reload ssh
 }
 
 # 관리·로그 에이전트 2종. 세 서버 같은 설정 한 벌(변경 A)
@@ -93,7 +100,8 @@ hostkeys() {
 case "${1:-base}" in
   base) base ;;
   agents) agents ;;
+  ssh) ssh ;;
   postgresql) postgresql ;;
   hostkeys) hostkeys "${2:-}" ;;
-  *) echo "사용법: $0 [base|agents|postgresql|hostkeys <시각>]" >&2; exit 2 ;;
+  *) echo "사용법: $0 [base|agents|ssh|postgresql|hostkeys <시각>]" >&2; exit 2 ;;
 esac

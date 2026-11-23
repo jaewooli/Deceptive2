@@ -55,6 +55,9 @@ host_services() {
   if ! (exec 3<>/dev/tcp/127.0.0.1/$APT_PORT) 2>/dev/null; then
     nohup python3 "$HERE/apt_cache.py" $APT_PORT >"$DIR/apt-cache.log" 2>&1 &
   fi
+  if ! (exec 3<>/dev/tcp/127.0.0.1/9099) 2>/dev/null; then   # 경보 수신기(infra/env/local.yml notify)
+    nohup python3 "$HERE/webhook_sink.py" --port 9099 --out "$DIR/webhook.jsonl" >"$DIR/webhook-sink.log" 2>&1 &
+  fi
   if ! (exec 3<>/dev/tcp/127.0.0.1/$FILES_PORT) 2>/dev/null; then
     install -d "$DIR/files"
     nohup python3 -m http.server $FILES_PORT --bind 127.0.0.1 --directory "$DIR/files" >"$DIR/files-http.log" 2>&1 &
