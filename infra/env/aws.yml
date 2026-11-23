@@ -1,0 +1,27 @@
+# 환경 프로필 — AWS(11/28 일괄 구축 때 채움). local.yml과 같은 키, 값만 다르다. 비어 있는 값(~)은 Terraform 출력으로 채운다
+name: aws
+lan_cidr: 10.0.0.0/16
+segments:
+  10.0.1.0/24: {name: public, gw: 10.0.1.1, sensor_nics: [~]}     # 센서 ENI(투영 디코이마다 하나)
+  10.0.2.0/24: {name: internal, gw: 10.0.2.1, sensor_nics: [~]}
+access:
+  user: ubuntu
+  transport: ssm               # SSM Session Manager(관리 SSH 없음)
+hosts:
+  web-01: {group: company, instance_id: ~}
+  app-01: {group: company, instance_id: ~}
+  db-backup-01: {group: decoys, instance_id: ~, ip: ~}
+  sensor: {group: sensors, instance_id: ~}
+  farm: {group: farms, instance_id: ~}
+farm:
+  tunnel_endpoint: ~           # 팜 서브넷(10.0.3.0/24) 주소
+  persist: true                # 재부팅 뒤 자동으로 살아나야 함
+  instance_type: ~             # metal 또는 중첩 지원(C8i·M8i·R8i + NestedVirtualization=enabled) — 서울 리전 확인 후(local-aws-parity 3절)
+  guest:
+    cpus: 2
+    disk_gb: 8                 # EC2 기본 루트 볼륨
+    hw: aws                    # EC2처럼(DMI·NVMe·IMDS) — 미구현
+    cwagent_mode: ec2
+    dns: ~                     # VPC 리졸버(10.0.0.2)
+    apt_proxy: ""
+    build_redirect: []

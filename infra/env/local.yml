@@ -1,0 +1,39 @@
+# 환경 프로필 — 로컬 랩(docs/local-aws-parity.md). 로컬과 AWS의 차이는 이 파일과 aws.yml에만 둔다(코드에 환경 분기 금지).
+# 이 값들로 out/baits/{inventory,destinations}.yml 과 검사 명세를 만든다: python3 infra/env/render.py local
+name: local
+
+# 회사 LAN(VPC 10.0.0.0/16에 해당). 로컬은 관리 NIC가 10.0.2.0/24라 /23으로 좁힌다
+lan_cidr: 10.0.20.0/23
+segments:                      # 구간 = 서브넷. 게이트웨이 = .1(로컬 router VM, AWS는 VPC 라우터)
+  10.0.20.0/24: {name: internal, gw: 10.0.20.1, sensor_nics: [enp0s3]}
+  10.0.21.0/24: {name: public, gw: 10.0.21.1, sensor_nics: [enp0s8]}
+
+# 관리 접속(미끼 엔진·검사). 로컬 = lab.sh VM의 SSH 포워딩, 팜 = WSL2 자신(local)
+access:
+  user: ubuntu
+  key: ~/.cache/deceptive2-vm/id_ed25519
+hosts:
+  web-01: {group: company, port: 2235}
+  app-01: {group: company, port: 2232}
+  db-backup-01: {group: decoys, port: 2231, ip: 10.0.20.15}
+  sensor: {group: sensors, port: 2233}
+  router: {group: lab, port: 2236}           # 로컬 전용(VPC 라우터 흉내)
+  farm: {group: farms, connection: local}    # WSL2 = 팜(3중 중첩 회피, 11/23)
+
+farm:
+  # 센서·EDH가 터널을 거는 팜 주소 — VM에서 본 WSL2(QEMU 사용자망). AWS는 팜 서브넷 주소
+  tunnel_endpoint: 10.0.2.2
+  # 부팅 때 자동 시작 안 함 — WSL2는 사용자 작업 환경, `wsl --shutdown`이 항상 완전 복구(docs/local-farm-recovery.md)
+  persist: false
+  guest:
+    cpus: 2                    # 랩 VM과 같은 2(WSL2 위 1단 KVM이라 3중 중첩 문제 없음)
+    disk_gb: 20                # 로컬 진짜 VM 디스크(vda 20G). AWS는 8
+    hw: local                  # 기계 모양: local = 랩 VM(q35·virtio·nocloud), aws = EC2처럼(미구현 — local-aws-parity 4절)
+    cwagent_mode: onPremise
+    dns: 10.0.2.3              # 디코이 안 DNS = 진짜 랩 VM과 같은 값(QEMU 사용자망 DNS)
+    apt_proxy: http://10.0.2.2:3142   # 디코이 안 01-lab-proxy = 진짜 랩 VM과 같은 파일
+    # 빌드 동안만: 디코이가 본 주소 → WSL2 쪽 실제 주소(진짜 VM은 QEMU 사용자망이 해 주는 일)
+    build_redirect:
+      - {to: 10.0.2.2, port: 3142, proto: tcp, via: "127.0.0.1:3142"}   # apt 캐시(lab.sh가 127.0.0.1에 띄움)
+      - {to: 10.0.2.3, port: 53, proto: udp, via: resolver}             # resolver = 실행 때 /etc/resolv.conf에서
+      - {to: 10.0.2.3, port: 53, proto: tcp, via: resolver}

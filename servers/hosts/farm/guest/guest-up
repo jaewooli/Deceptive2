@@ -2,6 +2,10 @@
 # guest@<이름> 시작 뒤: 투영 주소 경로 → 탭. 실패해도 VM을 내리지 않는다(11/22: 시작 스크립트 실패 → 디코이가 같이 내려감)
 n=$1; . /etc/guest/$n.env; x=${ADDR%/*}; t=ve-$n
 for i in $(seq 50); do ip link show "$t" >/dev/null 2>&1 && break; sleep 0.2; done
+# 탭: 링크 로컬 주소(proxy ARP에 IPv4 하나 필요) + proxy ARP — 게이트웨이(.1)를 팜 주소로 두지 않는다(라우터 ARP 가로채기, 11/23)
+ip addr replace 169.254.31.2/32 dev $t 2>/dev/null
+ip link set $t up 2>/dev/null
+sysctl -q -w net.ipv4.conf.$t.proxy_arp=1 2>/dev/null
 sysctl -q -w net.ipv4.conf.$t.rp_filter=2 2>/dev/null
 ip route replace $x/32 dev $t
 # 응답 → relay 터널(경로표 120은 relay PostUp이 채움). 터널이 없으면 unreachable로 버린다 — 비어 있으면 main으로 떨어져

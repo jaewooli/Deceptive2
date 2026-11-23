@@ -229,8 +229,12 @@ def place_projection(r, pid):
     extras, rargs = role_extras(a)
     key = Path(yaml.safe_load((OUT / "inventory.yml").read_text())["all"]["vars"]["ansible_ssh_private_key_file"] + ".pub")
     n = a["name"]
+    g = farm["guest"]   # 환경 프로필(infra/env/<환경>.yml)의 값 — 코드엔 환경 분기 없음
+    redirect = ";".join(f"{r['proto']}:{r['to']}:{r['port']}>{r['via']}" for r in g.get("build_redirect") or [])
+    genv = (f"GUEST_HW={g['hw']} DISK_GB={g['disk_gb']} GUEST_DNS={g['dns']} APT_PROXY='{g.get('apt_proxy') or ''}' "
+            f"CWAGENT_MODE={g['cwagent_mode']} PERSIST={str(farm.get('persist', True)).lower()} BUILD_REDIRECT='{redirect}'")
     run = (f"set -euo pipefail\ncd \"$(dirname \"$0\")\"\n"
-           f"APT_SNAPSHOT={a.get('platform', {}).get('apt_snapshot') or ''} bash guest/guest.sh create {n} {a['addr']} {a['gw']} {p['mac']} {a['mem']} {farm.get('guest_cpus', 2)} {','.join(a['packages'])} mgmt.pub {'pg' if a['pg'] else ''}\n"
+           f"{genv} APT_SNAPSHOT={a.get('platform', {}).get('apt_snapshot') or ''} bash guest/guest.sh create {n} {a['addr']} {a['gw']} {p['mac']} {a['mem']} {g['cpus']} {','.join(a['packages'])} mgmt.pub {'pg' if a['pg'] else ''}\n"
            f"bash guest/guest.sh offline {n}\n(cd role && GUEST_NAME={n} bash ./role.sh {' '.join(rargs)})\n"
            f"bash guest/guest.sh seal {n}\nbash guest/guest.sh online {n}\n")
     files = {"guest": str(SRV / "hosts/farm/guest"), "guest/base": str(SRV / "base"),
@@ -255,7 +259,9 @@ ip route del {x}/32 2>/dev/null; ip route del blackhole {x}/32 metric 1000 2>/de
 
 def dests():
     p = OUT / "destinations.yml"
-    return yaml.safe_load(p.read_text()) if p.exists() else {T.DECOY: {"ip": "10.0.2.30"}}
+    if not p.exists():
+        raise SystemExit(f"{p} 없음 — python3 infra/env/render.py <환경> 먼저(환경 값은 infra/env/에만)")
+    return yaml.safe_load(p.read_text())
 
 
 def build(r, item, rotated_from=None):

@@ -9,16 +9,21 @@
 #   guest.sh offline <이름>   # VM을 끄고 디스크를 /var/lib/machines/<이름>(+/boot, /boot/efi)에 마운트 — 역할 스크립트는 여기에 비부팅 nspawn으로
 #   guest.sh online <이름>    # 마운트 해제, user-data를 기본형으로(빌드 내용 제거, instance-id 유지), VM 시작
 #   guest.sh status
-# 네트워크: VM NIC = 탭 ve-<이름>(컨테이너 veth와 같은 이름 → farm install.sh의 networkd 파일·relay 규칙 그대로), PCI 슬롯 3 → 게스트 enp0s3
-# 로컬 랩 VM과 같게: q35, virtio 디스크·NIC, balloon, cloud-id nocloud(로컬 진짜 서버도 nocloud). EC2(Ec2 데이터소스·IMDS·NVMe·ENA)는 11/28 — HANDOFF 11절
+# 네트워크: VM NIC = 탭 ve-<이름>(relay 규칙 그대로), PCI 슬롯 3 → 게스트 enp0s3. 탭 설정은 guest-up이(networkd엔 Unmanaged만 —
+#   WSL2 팜은 networkd가 안 돌고, AWS 팜은 돌아도 이 링크를 안 잡게: 같은 코드)
+# 환경 값(기본값 없음 — infra/env/<환경>.yml → 미끼 엔진이 넘김, docs/local-aws-parity.md):
+#   GUEST_HW(local|aws) DISK_GB GUEST_DNS APT_PROXY(빈 값 가능) CWAGENT_MODE PERSIST(true|false) BUILD_REDIRECT("proto:주소:포트>대상;…", 빈 값 가능)
+# GUEST_HW=local: 로컬 랩 VM과 같은 모양(q35·virtio·balloon·cloud-id nocloud). aws(EC2 모양·IMDS)는 미구현 — local-aws-parity 4절
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=/var/lib/guests; ETC=/etc/guest; LOGD=/var/log/guests
 BASE_IMG=/var/cache/decoy/noble-server-cloudimg-amd64.img
 IMG_URL=https://cloud-images.ubuntu.com/noble/current
-APT_PROXY=${APT_PROXY:-http://10.0.2.2:3142}     # 로컬 랩 전용(진짜 VM에도 같은 01-lab-proxy가 있음). EC2에서는 빈 값
-CWAGENT_MODE=${CWAGENT_MODE:-onPremise}
-DNS=${GUEST_DNS:-10.0.2.3}                      # 로컬 진짜 VM의 resolved 상위 DNS와 같은 값
+envs() {  # create 때 환경 값 확인(이후 offline·seal·online은 <이름>.env에서 읽음)
+  : "${GUEST_HW:?GUEST_HW}" "${DISK_GB:?DISK_GB}" "${GUEST_DNS:?GUEST_DNS}" "${CWAGENT_MODE:?CWAGENT_MODE}" "${PERSIST:?PERSIST}"
+  APT_PROXY=${APT_PROXY-}; BUILD_REDIRECT=${BUILD_REDIRECT-}
+  [ "$GUEST_HW" = local ] || { echo "GUEST_HW=$GUEST_HW 미구현(EC2 모양·IMDS — docs/local-aws-parity.md 4절)" >&2; exit 2; }
+}
 export DEBIAN_FRONTEND=noninteractive
 
 need() {
@@ -61,7 +66,7 @@ ethernets:
       - to: default
         via: $GW
     nameservers:
-      addresses: [$DNS]
+      addresses: [$GUEST_DNS]
 EOF
   # 기본 user-data = 로컬 진짜 VM과 같은 내용(infra/local-vm/vm.sh make_seed)
   cat > "$d/user-data" <<EOF
@@ -104,24 +109,39 @@ EOF
 
 build_egress() {  # on|off <이름> — 빌드 동안만: 게스트 → farm 바깥(NAT). 평소 게스트 응답은 relay 터널로만(pref 50)
   local n=$2 x; x=$(. "$ETC/$n.env"; echo "${ADDR%/*}")
+  # BUILD_REDIRECT: 디코이가 본 주소(진짜 VM과 같은 apt 프록시·DNS) → 팜 쪽 실제 주소. via=resolver면 팜의 상위 DNS
+  local pre="" r proto to port via
+  # shellcheck disable=SC1090
+  . "$ETC/$n.env"
+  for r in ${BUILD_REDIRECT//;/ }; do
+    proto=${r%%:*}; to=${r#*:}; to=${to%%:*}; port=${r#*:*:}; port=${port%%>*}; via=${r#*>}
+    [ "$via" = resolver ] && via="$(awk '/^nameserver/ {print $2; exit}' /run/systemd/resolve/resolv.conf 2>/dev/null || true)"
+    [ -n "$via" ] || via="$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)"
+    case $via in *:*) ;; *) via="$via:$port" ;; esac
+    pre+="iifname \"ve-$n\" ip daddr $to $proto dport $port dnat to $via; "
+  done
   if [ "$1" = on ]; then
     ip rule show pref 49 | grep -q . || ip rule add pref 49 iif "ve-$n" lookup main
+    # 127.0.0.1로 돌리려면 그 링크에서 루프백 목적지를 허용해야 한다(빌드 동안만)
+    sysctl -q -w "net.ipv4.conf.ve-$n.route_localnet=1" 2>/dev/null || true
     nft -f - <<EOF
 table ip guest_build
 delete table ip guest_build
 table ip guest_build {
+  chain pre { type nat hook prerouting priority dstnat; policy accept; $pre}
   chain post { type nat hook postrouting priority srcnat; policy accept; ip saddr $x oifname "$(uplink)" masquerade; }
 }
 EOF
   else
     ip rule del pref 49 2>/dev/null || true
     nft delete table ip guest_build 2>/dev/null || true
+    sysctl -q -w "net.ipv4.conf.ve-$n.route_localnet=0" 2>/dev/null || true
   fi
 }
 
 create() {
   local n=${1:?이름} addr=${2:?주소/접두} gw=${3:?게이트웨이} mac=${4:?MAC} mem=${5:?메모리} cpus=${6:?vCPU} pkgs=${7:?패키지} key=${8:?공개키} pg=${9:-}
-  need
+  envs; need
   [ -d "$HERE/base" ] || { echo "base/ 없음(공통 베이스를 이 디렉터리에 같이 보낼 것)" >&2; exit 2; }
   local iid; iid=$( [ -f "$ETC/$n.env" ] && sed -n 's/^INSTANCE_ID=//p' "$ETC/$n.env" || echo "$n-$(date +%s)")
   cat > "$ETC/$n.env" <<EOF
@@ -134,28 +154,25 @@ PKGS=$pkgs
 PG=$pg
 SNAPSHOT=${APT_SNAPSHOT:-}
 INSTANCE_ID=$iid
+GUEST_HW=$GUEST_HW
+GUEST_DNS=$GUEST_DNS
+APT_PROXY=$APT_PROXY
+CWAGENT_MODE=$CWAGENT_MODE
+PERSIST=$PERSIST
+BUILD_REDIRECT="$BUILD_REDIRECT"
 EOF
   install -m 0644 "$key" "$ETC/$n.pub"
-  # 팜 쪽 탭: proxy ARP(networkd로 고정 — 스크립트로 넣으면 기본 80-container-ve.network와 경쟁, 11/22)
+  # 팜 쪽 탭: 설정은 guest-up(링크 로컬 + proxy ARP). networkd가 돌더라도 이 링크는 안 잡게(Unmanaged — 11/22 경쟁, WSL2엔 networkd 없음)
   # 게이트웨이(.1)를 팜 자신의 주소로 두지 않는다 — 두면 팜이 LAN에서 진짜 라우터(.1)의 ARP를 가로챈다(Linux는 어느 NIC로 온 ARP든
   # 자기 주소면 답함, 11/23 구간 분리 때 발견). 탭엔 링크 로컬만, 게이트웨이 ARP는 proxy ARP가 답한다(팜이 그 주소로 가는 경로를 LAN 쪽에 가짐)
-  cat > "/etc/systemd/network/10-ve-$n.network" <<EOF
-[Match]
-Name=ve-$n
-
-[Network]
-Address=169.254.31.2/32
-IPv4ProxyARP=yes
-LinkLocalAddressing=no
-IPv6AcceptRA=no
-ConfigureWithoutCarrier=yes
-EOF
-  networkctl reload 2>/dev/null || true
+  install -d /etc/systemd/network
+  printf '[Match]\nName=ve-%s\n\n[Link]\nUnmanaged=yes\n' "$n" > "/etc/systemd/network/10-ve-$n.network"
+  systemctl is-active -q systemd-networkd && networkctl reload 2>/dev/null || true
   systemctl stop "guest@$n" 2>/dev/null || true
   systemctl disable "systemd-nspawn@$n" 2>/dev/null || true; systemctl stop "systemd-nspawn@$n" 2>/dev/null || true
   rm -f "$LIB/$n.qcow2"
   qemu-img convert -q -O qcow2 "$BASE_IMG" "$LIB/$n.qcow2"
-  qemu-img resize -q "$LIB/$n.qcow2" 20G      # 로컬 진짜 VM 디스크와 같은 크기(vda 20G). EC2는 8G
+  qemu-img resize -q "$LIB/$n.qcow2" "${DISK_GB}G"   # 같은 환경의 진짜 서버 디스크 크기(로컬 vda 20G, EC2 8G)
   offline "$n"; seed "$n" 1; umount_disk "$n"
   build_egress on "$n"
   : > "$LOGD/$n.log"
@@ -194,7 +211,10 @@ umount_disk() {
 online() {
   local n=${1:?이름}
   umount_disk "$n"
-  systemctl enable -q "guest@$n"; systemctl start "guest@$n"
+  # shellcheck disable=SC1090
+  . "$ETC/$n.env"
+  [ "$PERSIST" = true ] && systemctl enable -q "guest@$n"   # WSL2 팜은 부팅 자동 시작 없음(docs/local-farm-recovery.md)
+  systemctl start "guest@$n"
   echo "$n 시작"
 }
 
