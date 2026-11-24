@@ -210,4 +210,9 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - 실측(학습 로그 11/24 표): P 특정 0.6~1.2초. **짧은 연결(투영 SSH 인증 실패·디코이 PG 실패)은 수집기 도착 전에 끝나 P를 놓침**(TIME-WAIT만 남음). 미끼를 먼저 연 공격자는 세션 추적이 먼저 걸려 이후 명령이 다 기록됨(psql에 미끼 비밀번호까지 — out/는 커밋 안 함)
 - 공격자 시점: ps에 수집 인자(공격자 pid)가 보이던 것 수정 → `python3 -`만. 남는 것: root python3 프로세스(세션 끝까지 ≤300초), auth.log 관리 로그인 + sudo 줄, 감사 로그의 last·who
 - 상관기는 로컬에서 손으로 켬(`python3 forensics/correlate.py watch` — 자동 시작 없음, WSL 원칙)
-- 다음: tar-pit 결정(사용자) → ② 디코이 행동 기록(engagement) → ③ 침투 체인 상관분석(포렌식 사건 + 미끼 whois + 디코이 세션을 한 체인으로, TIME-WAIT만 남은 사건을 같은 서버의 추적 세션 명령과 시각으로 잇기) → ④ 시나리오 1·3 리허설
+- tar-pit(사용자 결정): **PG만 `auth_delay` 3초**(공통 베이스 `50-auth.conf`, app-01·디코이 같게) → 디코이 PG 실패 경로 P 특정. SSH 공개키 실패는 OpenSSH 9.6에 지연 수단 없음(한계)
+- 즉시 경보(사용자: "시중 솔루션을 따르면 그것에 맞게"): moa-notify PG·sshd `immediate` — 접속 첫 줄에서 "접속 시작"(Illusive forensic alert module). 스위치 `forensics`가 `notify-config`로 세 서버 값을 맞춤. 관문을 꺼도 PG 경로 P 특정
+- 포렌식 억제 = 실행 파일 + auid unset(SSM·CloudWatch·**ClamAV 03:17 검사** — 사용자 지적, 실측은 기준선 때)
+- **회귀 수정**: 60ac16f부터 엔진 `run` 작업이 빈 스크립트를 돌리고 성공 처리(쓰기 줄이 주석 안). 11/23 22:44 이후 run 작업(투영·트랩 스위치, decoy-agent 등)은 실제로 안 돌았음 — 11/24 farm-host check 전부 통과로 현재 상태는 정상 확인. 단위 테스트 추가
+- 회귀 결과(scenario.sh): 투영 SSH 인증 실패만 P를 놓침(남은 한계), 나머지 경로 모두 P 특정 0.6~1.3초
+- 다음: ② 디코이 행동 기록(engagement) → ③ 침투 체인 상관분석(포렌식 사건 + 미끼 whois + 디코이 세션을 한 체인으로, TIME-WAIT만 남은 사건을 같은 서버의 추적 세션 명령과 시각으로 잇기) → ④ 시나리오 1·3 리허설
