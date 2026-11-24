@@ -91,8 +91,10 @@ agents() {
 postgresql() {
   local conf_d
   conf_d=$(ls -d /etc/postgresql/*/main/conf.d | head -1)
-  install -m 0644 -o postgres -g postgres postgresql/50-logging.conf "$conf_d/50-logging.conf"
-  install -m 0644 -o postgres -g postgres postgresql/50-listen.conf "$conf_d/50-listen.conf"
+  local f
+  for f in 50-logging.conf 50-listen.conf 50-auth.conf; do   # 내용이 같으면 그대로(파일 시각 보존)
+    cmp -s "postgresql/$f" "$conf_d/$f" || install -m 0644 -o postgres -g postgres "postgresql/$f" "$conf_d/$f"
+  done
   local hba="${conf_d%/conf.d}/pg_hba.conf"
   local line="host    all             all             10.0.0.0/16             scram-sha-256"
   grep -qxF "$line" "$hba" || echo "$line" >> "$hba"

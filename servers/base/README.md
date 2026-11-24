@@ -6,7 +6,7 @@ web-01·app-01·db-backup-01에 **같은 파일 한 벌**을 배포한다. 호�
 - `install.sh audit`: audit 규칙만 다시(계정·서비스가 바뀐 뒤). 끝에 `audit/check.sh`
 - `install.sh base`: 시간대 Asia/Seoul, auditd·clamav(clamd 없음, freshclam + 매일 전체 검사 cron)·unattended-upgrades·logrotate·cron, audit 규칙
 - `clamav/`(11/21): `/etc/cron.d/clamav-scan` 매일 03:17 `clamscan -r -i /`(nice 19·ionice idle, 감염 파일만 `/var/log/clamav/clamscan.log`) + logrotate(주 1회, 4주). 백신을 깔아 두고 검사를 안 하는 서버는 앞뒤가 안 맞음. 이 검사가 매일 미끼 파일을 열므로 기준선의 실제 오탐원이 됨. 1GiB에서 OOM → web·app t3.small
-- `install.sh postgresql`: PG가 있는 서버(app-01, db-backup-01)에서 같은 PG 설정 — `postgresql/50-logging.conf`(접속·종료 기록, CIS PostgreSQL Benchmark 권고), `50-listen.conf` + `pg_hba` 내부망(10.0.0.0/16, scram-sha-256)
+- `install.sh postgresql`: PG가 있는 서버(app-01, db-backup-01)에서 같은 PG 설정 — `postgresql/50-logging.conf`(접속·종료 기록, CIS PostgreSQL Benchmark 권고), `50-listen.conf` + `pg_hba` 내부망(10.0.0.0/16, scram-sha-256), `50-auth.conf`(auth_delay 3초 — 인증 실패 응답 지연. 무차별 대입 완화이자 출발지 포렌식의 tar-pit: 실패한 로그인이 수집기 도착(0.6~1.2초) 전에 끝나던 것을 붙잡음, 11/24 사용자 결정. 디코이만이 아니라 PG가 있는 서버 모두 같게). 내용이 같은 파일은 다시 쓰지 않음(시각 보존)
 - `install.sh agents`(base 끝에서 자동): SSM 에이전트(snap — Ubuntu EC2 AMI 기본, 없을 때만 설치), CloudWatch 에이전트(서울 리전 버킷 deb, AWS 서명 키 지문 `9376 16F3 … 3B78 9C72` 확인 후 설치) + `cloudwatch/agent.json`
 - `cloudwatch/agent.json`(세 서버 같은 파일, 11/21): `/var/log/auth.log` → `/moayeyak/auth`, `/var/log/audit/audit.log` → `/moayeyak/audit`, PG 로그 → `/moayeyak/postgresql`, 스트림 `{instance_id}`. 지표 수집 없음(사용자 지표는 과금). PG 경로는 web-01에 파일이 없어도 그대로 둔다(설정이 서버마다 달라지지 않게). PG 로그를 밖으로 보내는 이유 = 사용자명 → T1/T5 대응을 서버 밖에서 하기로 한 11/20 결정
 - 시간대 변경 뒤 `rsyslog` 재시작: 안 하면 rsyslog가 시작할 때의 UTC로 계속 써서 auth.log에 `+00:00`과 `+09:00`이 섞인다(로컬 VM 확인). EC2에서도 같다(시간대를 base가 바꾸므로)
