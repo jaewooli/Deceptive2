@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 
+RUN_DIR = "/run"   # 실행용 임시 파일 자리(tmpfs — /root 시각을 바꾸지 않게, 11/23). 단위 테스트가 바꿈
 DATA = {}
 
 
@@ -295,7 +296,8 @@ def do(op, mode):
         if mode == "absent" and not op.get("on_absent"):
             return "absent"
         argv = op["on_absent"] if mode == "absent" else op["argv"]
-        fd, sp = tempfile.mkstemp(prefix=".r", dir="/run")   # /root에 만들면 /root 시각이 바뀜(11/23) — /run은 tmpfs; os.write(fd, op["script"].encode()); os.close(fd)
+        fd, sp = tempfile.mkstemp(prefix=".r", dir=RUN_DIR)   # /root에 만들면 /root 시각이 바뀜(11/23) — /run은 tmpfs
+        os.write(fd, op["script"].encode()); os.close(fd)   # 11/24: 이 줄이 위 주석 안에 들어가 빈 스크립트가 돌던 버그
         try:
             r = subprocess.run(["/bin/bash", sp, *argv], capture_output=True, text=True)
         finally:
@@ -314,7 +316,7 @@ def do(op, mode):
             return "ok"
         if mode == "absent" and not op.get("on_absent"):
             return "absent"
-        d = tempfile.mkdtemp(prefix=".b", dir="/run")   # /root 시각을 바꾸지 않게(11/23)
+        d = tempfile.mkdtemp(prefix=".b", dir=RUN_DIR)   # /root 시각을 바꾸지 않게(11/23)
         try:
             with tarfile.open(fileobj=io.BytesIO(base64.b64decode(op["tgz"])), mode="r:gz") as t:
                 t.extractall(d, filter="data")
@@ -387,18 +389,23 @@ def do(op, mode):
         p = "/etc/moa-notify/config.json"
         cfg = json.load(open(p))
         w = cfg.get("watch", {}).get(op["watch"])
+        if w is None and op.get("optional"):   # 그 서버에 없는 항목이면 그대로(설정값만 맞추는 경우)
+            return "ok"
         if w is None and op.get("cfg"):   # 없으면 같은 모양으로 추가(세 서버 설정 모양 통일)
             if mode == "check":
                 return "drift"
-            w = cfg.setdefault("watch", {})[op["watch"]] = dict(op["cfg"], enabled=not op["enabled"])
+            w = cfg.setdefault("watch", {})[op["watch"]] = dict(op["cfg"], enabled=not op.get("enabled", True))
         if w is None:
             DATA["error"] = f"감시 항목 없음: {op['watch']}"
             return "failed"
-        if bool(w.get("enabled", True)) == bool(op["enabled"]):
+        want = dict(op.get("set") or {})   # set: 항목 설정값(예: immediate) — 같이 맞춤. enabled가 없으면 켜짐 상태는 그대로
+        if "enabled" in op:
+            want["enabled"] = bool(op["enabled"])
+        if all(w.get(k, True if k == "enabled" else None) == v for k, v in want.items()):
             return "ok"
         if mode == "check":
             return "drift"
-        w["enabled"] = bool(op["enabled"])
+        w.update(want)
         tmp = p + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.write(fd, json.dumps(cfg, ensure_ascii=False, indent=1).encode()); os.close(fd)
         os.replace(tmp, p)

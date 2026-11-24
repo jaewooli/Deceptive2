@@ -103,6 +103,30 @@ class PgConnectionsTest(unittest.TestCase):
             self.assertEqual(got, expected, path.name)
 
 
+class ImmediateTest(unittest.TestCase):
+    """immediate: 접속 첫 줄에서 '접속 시작'을 바로, 결과 알림은 그대로 따로(11/24 — 출발지 포렌식이 연결이 살아 있을 때 도착하게)"""
+
+    def test_pg_start_then_result(self):
+        w = mn.PgConnections({"settle_seconds": 0, "immediate": True}, "db-backup-01")
+        a = w.feed("2026-11-24 20:00:00.000 KST [700] [unknown]@[unknown] LOG:  connection received: host=10.0.21.11 port=40000")
+        self.assertEqual([(x["result"], x["client"]) for x in a], [("접속 시작", "10.0.21.11:40000")])
+        b = w.feed('2026-11-24 20:00:03.000 KST [700] rpt_ro@moayeyak FATAL:  password authentication failed for user "rpt_ro"')
+        self.assertEqual([x["result"] for x in b], ["비밀번호 인증 실패"])
+
+    def test_pg_off_by_default(self):
+        w = mn.PgConnections({"settle_seconds": 0}, "db-backup-01")
+        self.assertEqual(w.feed("2026-11-24 20:00:00.000 KST [701] [unknown]@[unknown] LOG:  connection received: host=10.0.21.11 port=40001"), [])
+
+    def test_ssh_start_then_result(self):
+        w = mn.SshSessions({"immediate": True}, "lt-decoy")
+        a = w.feed("2026-11-24T20:00:00.000000+09:00 lt-decoy sshd[800]: Connection from 10.0.21.11 port 50000 on 10.0.20.15 port 22 rdomain \"\"")
+        self.assertEqual([(x["result"], x["client"]) for x in a], [("접속 시작", "10.0.21.11:50000")])
+        w.feed("2026-11-24T20:00:00.300000+09:00 lt-decoy sshd[800]: Failed publickey for backup from 10.0.21.11 port 50000 ssh2: ED25519 SHA256:abc")
+        b = w.feed("2026-11-24T20:00:00.400000+09:00 lt-decoy sshd[800]: Connection closed by authenticating user backup 10.0.21.11 port 50000 [preauth]")
+        self.assertEqual(len(b), 1)
+        self.assertIn("SHA256:abc", b[0]["result"])
+
+
 class FollowerTest(unittest.TestCase):
     def test_append_truncate_rotate_and_resume(self):
         with tempfile.TemporaryDirectory() as d:

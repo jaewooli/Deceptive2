@@ -262,9 +262,12 @@ def notify_config():
     n = dests()["notify"]
     sshd = {"path": "/var/log/auth.log", "settle_seconds": 3}
     audit = {"path": "/var/log/audit/audit.log", "dedupe_seconds": 30}   # 자격증명 파일 열람·지속성 경로(11/26) — 모든 서버 켬(자체 설계)
+    # 접속 시작 즉시 경보(immediate) = Illusive 출발지 포렌식의 "트랩이 접속 순간 관리 서버에 알림"(forensic alert module) — 스위치 forensics를 따름
+    imm = {"immediate": feature_state(load_reg(), "forensics") == "on"}
     for h in inventory().get("company", []) + inventory().get("decoys", []):
         st, _ = one(h, [{"kind": "moa_set", "values": {"webhook_url": n["webhook_url"], "format": n.get("format", "json")}},
-                        {"kind": "moa_watch", "watch": "sshd", "enabled": h in inventory().get("decoys", []), "cfg": sshd},
+                        {"kind": "moa_watch", "watch": "sshd", "enabled": h in inventory().get("decoys", []), "cfg": sshd, "set": imm},
+                        {"kind": "moa_watch", "watch": "postgresql", "optional": True, "set": imm},
                         {"kind": "moa_watch", "watch": "audit", "enabled": True, "cfg": audit}])
         print(h, st)
 
@@ -658,6 +661,8 @@ def feature_set(r, name, state):
     elif name == "conntable":
         sync_refresh(r)
         gate_apply(r)
+    elif name == "forensics":
+        notify_config()   # 접속 시작 즉시 경보(immediate) 켜고 끄기 — 상관기(forensics/correlate.py)도 스위치를 읽음
 
 
 def cmd_feature(a):

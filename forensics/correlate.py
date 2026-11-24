@@ -85,8 +85,9 @@ def decide(alert, ip2host, name2host):
     if src == "감사":
         a = alert.get("audit") or {}
         exe = a.get("exe") or ""
-        if any(re.search(p, exe) for p in CONF["audit_skip_exe"]):
-            return None, None, f"억제 목록 exe({exe}) — 11/30 오탐 분석 대상"
+        for rule in CONF["audit_skip"]:
+            if re.search(rule["exe"], exe) and (a.get("auid") or "unset") == rule.get("auid", a.get("auid")):
+                return None, None, f"억제 목록 exe({exe}, auid {a.get('auid')}) — 11/30 오탐 분석 대상"
         host = name2host.get(alert.get("host"))
         if not host:
             return None, None, f"회사 서버 아님({alert.get('host')})"

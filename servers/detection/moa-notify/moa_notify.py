@@ -114,6 +114,8 @@ class PgConnections:
         self.host = host
         self.settle = float(cfg.get("settle_seconds", 3))
         self.ignore_local = bool(cfg.get("ignore_local", False))
+        # immediate: 접속 첫 줄에서 바로 한 번 알린다(결과 알림은 그대로 나중에) — 대응 쪽이 연결이 살아 있을 때 출발지를 볼 수 있게
+        self.immediate = bool(cfg.get("immediate", False))
         self.sessions = {}  # pid -> dict
         self.finished = {}  # 알림을 보낸 pid -> 시각. 같은 접속의 뒤따르는 줄(종료 등)은 다시 알리지 않음
 
@@ -152,6 +154,9 @@ class PgConnections:
             s["client"] = r["host"] + (f":{r['port']}" if r["port"] else "")
             if r["host"] == "127.0.0.1" and r["port"] and int(r["port"]) in GATE_MAP:
                 s["client"] = GATE_MAP.pop(int(r["port"])) + " (관문 경유)"
+            if self.immediate and not (self.ignore_local and r["host"] == "[local]"):
+                return [{"host": self.host, "source": self.name, "client": s["client"], "user": None, "database": None,
+                         "result": "접속 시작", "log_ts": s["log_ts"], "pid": pid, "lines": [line]}]
             return []
         if (r := RE_AUTHORIZED.match(msg)):
             s["user"], s["database"] = r["user"], r["db"] or s["database"]
@@ -232,6 +237,7 @@ class SshSessions:
     def __init__(self, cfg, host):
         self.host = host
         self.settle = float(cfg.get("settle_seconds", 3))
+        self.immediate = bool(cfg.get("immediate", False))   # PgConnections와 같은 뜻
         self.s = {}
         self.finished = {}   # 알린 pid → 시각. 같은 접속의 뒤따르는 줄(종료 등)은 다시 알리지 않음(11/23: 로그인 성공 뒤 종료 줄이 '알 수 없음' 경보로)
 
@@ -264,6 +270,9 @@ class SshSessions:
                 s["user"] = s["user"] or g["user"]
             if g.get("fp") and g["fp"] not in s["fps"]:
                 s["fps"].append(g["fp"])
+            if kind == "conn" and self.immediate:
+                return [{"host": self.host, "source": self.name, "client": s["client"], "user": None, "database": None,
+                         "result": "접속 시작", "log_ts": m["ts"], "pid": pid, "lines": [line]}]
             if kind == "ok":
                 s["result"] = f"로그인 성공({g['method']})"
                 return self._finish(pid)      # 로그인 성공은 바로 알린다

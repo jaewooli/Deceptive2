@@ -67,3 +67,19 @@ class Mtimes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunOp(unittest.TestCase):
+    """11/24: 스크립트를 쓰는 줄이 주석 안에 들어가 빈 스크립트가 '성공'하던 회귀"""
+
+    def test_script_runs_and_collects(self):
+        A.RUN_DIR = tempfile.mkdtemp()
+        A.DATA.clear()
+        st = A.do({"kind": "run", "argv": ["x"], "collect": ["v"], "script": 'echo "v=got-$1"\n'}, "apply")
+        self.assertEqual(st, "changed")
+        self.assertEqual(A.DATA.get("v"), "got-x")
+        self.assertEqual(os.listdir(A.RUN_DIR), [])   # 임시 파일 남기지 않음
+
+    def test_failing_script_fails(self):
+        A.RUN_DIR = tempfile.mkdtemp()
+        self.assertEqual(A.do({"kind": "run", "argv": [], "script": "exit 3\n"}, "apply"), "failed")
