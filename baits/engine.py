@@ -264,11 +264,15 @@ def notify_config():
     audit = {"path": "/var/log/audit/audit.log", "dedupe_seconds": 30}   # 자격증명 파일 열람·지속성 경로(11/26) — 모든 서버 켬(자체 설계)
     # 접속 시작 즉시 경보(immediate) = Illusive 출발지 포렌식의 "트랩이 접속 순간 관리 서버에 알림"(forensic alert module) — 스위치 forensics를 따름
     imm = {"immediate": feature_state(load_reg(), "forensics") == "on"}
+    # 로그인 세션 기록(Attivo engagement) — 디코이만 켬(정상 업무에서 아무도 안 들어옴), 회사 서버엔 같은 모양으로 꺼 둠
+    eng = feature_state(load_reg(), "engagement") == "on"
+    sess = {"path": "/var/log/audit/audit.log", "flush_seconds": 5, "file_max_bytes": 1048576}
     for h in inventory().get("company", []) + inventory().get("decoys", []):
         st, _ = one(h, [{"kind": "moa_set", "values": {"webhook_url": n["webhook_url"], "format": n.get("format", "json")}},
                         {"kind": "moa_watch", "watch": "sshd", "enabled": h in inventory().get("decoys", []), "cfg": sshd, "set": imm},
                         {"kind": "moa_watch", "watch": "postgresql", "optional": True, "set": imm},
-                        {"kind": "moa_watch", "watch": "audit", "enabled": True, "cfg": audit}])
+                        {"kind": "moa_watch", "watch": "audit", "enabled": True, "cfg": audit},
+                        {"kind": "moa_watch", "watch": "sessions", "enabled": eng and h in inventory().get("decoys", []), "cfg": sess}])
         print(h, st)
 
 
@@ -509,6 +513,7 @@ FEATURES = {   # 스위치 = 시중 벤더 기술 단위(11/23 사용자: 끄면
     "trap": ("Illusive 트랩 서버 중계(빈 포트 → 팜 트랩 + 활성 트랩만 가리키는 cache_hint, US10404747)", ["decoy_port", "cache_hint"]),
     "conntable": ("Attivo 연결 테이블 미끼(핸드셰이크만 한 연결 + 디코이 페이로드 관문, US10375110)", []),
     "projection": ("Acalvio 투영(센서 → 팜 디코이 VM)", ["projection"]),
+    "engagement": ("Attivo 디코이 행동 기록(로그인 세션 명령·만든 파일 회수·디코이 밖 트래픽 녹화·사건 타임라인) — db-backup-01은 moa-notify sessions, 투영 디코이는 팜이 디스크를 읽음", []),
     "forensics": ("Illusive 출발지 포렌식(경보 → 출발 서버의 접속 프로세스 P 특정·활동 기록, US10382484) — 관리 쪽 forensics/correlate.py, 서버엔 흔적 없음", []),
 }
 # 항상 켜 둠(자체 설계 — 특정 벤더 기술이 아님): db-backup-01 옛 백업 서버 디코이, moa-notify, 랩 장치·검사 도구
@@ -661,9 +666,17 @@ def feature_set(r, name, state):
     elif name == "conntable":
         sync_refresh(r)
         gate_apply(r)
+    elif name == "engagement":
+        notify_config()
+        engage_apply(state == "on")
     elif name == "forensics":
         notify_config()   # 접속 시작 즉시 경보(immediate) 켜고 끄기 — 상관기(forensics/correlate.py)도 스위치를 읽음
         tarpit_apply(state == "on")
+
+
+def engage_apply(on):
+    """투영 디코이 쪽: 팜 relay-engage(디스크를 읽어 세션 기록 + ve-* 트래픽 녹화) 켜고 끄기 — 11/24 다음 단계에서 채움"""
+    pass
 
 
 def tarpit_apply(on):

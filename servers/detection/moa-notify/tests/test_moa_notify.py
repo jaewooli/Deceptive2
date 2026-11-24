@@ -127,6 +127,44 @@ class ImmediateTest(unittest.TestCase):
         self.assertIn("SHA256:abc", b[0]["result"])
 
 
+class LoginSessionsTest(unittest.TestCase):
+    """11/24 실제 기록(web-01 deploy가 미끼 키로 db-backup-01 backup 로그인, 파일 만들고 실행·복사·이름 바꿈)"""
+
+    def run_fixture(self, root):
+        w = mn.LoginSessions({"files_root": root, "flush_seconds": 0}, "db-backup-01")
+        out = []
+        with open(os.path.join(os.path.dirname(__file__), "fixtures", "session-audit.log")) as f:
+            for line in f:
+                out += w.feed(line.rstrip("\n"))
+        return out + w.tick(force=True)
+
+    def test_commands_files_and_end(self):
+        import base64, hashlib, tempfile
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "tmp"))
+        body = b"#!/bin/sh\necho scan\n"
+        for n in (".x.sh", ".z"):
+            open(os.path.join(root, "tmp", n), "wb").write(body)
+        out = self.run_fixture(root)
+        self.assertEqual(len(out), 1)
+        e = out[0]
+        self.assertEqual((e["source"], e["client"], e["user"]), ("세션", "10.0.21.11", "backup"))
+        self.assertTrue(e["session"]["end"])
+        argv = [" ".join(c["argv"]) for c in e["session"]["commands"]]
+        self.assertIn("chmod +x /tmp/.x.sh", argv)
+        self.assertIn("mv /tmp/.y /tmp/.z", argv)
+        files = {f["path"]: f for f in e["session"]["files"]}
+        self.assertEqual(set(files), {"/tmp/.x.sh", "/tmp/.y", "/tmp/.z"})
+        self.assertEqual(files["/tmp/.x.sh"]["sha256"], hashlib.sha256(body).hexdigest())
+        self.assertEqual(base64.b64decode(files["/tmp/.z"]["content_b64"]), body)
+        self.assertIn("error", files["/tmp/.y"])   # 옮겨져 없어진 중간 파일
+
+    def test_other_sessions_ignored(self):
+        w = mn.LoginSessions({}, "t")
+        self.assertEqual(w.feed('type=SYSCALL msg=audit(1.0:1): arch=c000003e syscall=59 success=yes ses=999 key="user-cmd"'), [])
+        self.assertEqual(w.tick(force=True), [])
+
+
 class FollowerTest(unittest.TestCase):
     def test_append_truncate_rotate_and_resume(self):
         with tempfile.TemporaryDirectory() as d:

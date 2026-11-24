@@ -1,0 +1,50 @@
+## 로그인 세션이 만든·옮긴 파일(사용자가 쓰는 위치만 — 패키지 설치가 쓰는 /usr·/etc·/var/lib는 제외)
+## 서비스 프로세스(systemd가 띄운 것)는 auid가 없으므로 남지 않는다. O_CREAT = 0100
+-a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/home -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/home -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/home -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S openat -F a2&0100 -F dir=/home -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S open -F a1&0100 -F dir=/home -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S creat,rename,renameat,renameat2 -F dir=/home -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/root -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/root -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/root -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S openat -F a2&0100 -F dir=/root -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S open -F a1&0100 -F dir=/root -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S creat,rename,renameat,renameat2 -F dir=/root -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S openat -F a2&0100 -F dir=/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S open -F a1&0100 -F dir=/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S creat,rename,renameat,renameat2 -F dir=/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/var/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/var/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/var/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S openat -F a2&0100 -F dir=/var/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S open -F a1&0100 -F dir=/var/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S creat,rename,renameat,renameat2 -F dir=/var/tmp -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/dev/shm -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/dev/shm -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/dev/shm -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S openat -F a2&0100 -F dir=/dev/shm -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S open -F a1&0100 -F dir=/dev/shm -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S creat,rename,renameat,renameat2 -F dir=/dev/shm -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/srv -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/srv -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/srv -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S openat -F a2&0100 -F dir=/srv -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S open -F a1&0100 -F dir=/srv -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S creat,rename,renameat,renameat2 -F dir=/srv -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/opt -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/opt -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/opt -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S openat -F a2&0100 -F dir=/opt -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S open -F a1&0100 -F dir=/opt -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S creat,rename,renameat,renameat2 -F dir=/opt -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/usr/local -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/usr/local -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/usr/local -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S openat -F a2&0100 -F dir=/usr/local -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S open -F a1&0100 -F dir=/usr/local -F auid!=unset -F success=1 -F key=user-file
+-a always,exit -F arch=b32 -S creat,rename,renameat,renameat2 -F dir=/usr/local -F auid!=unset -F success=1 -F key=user-file

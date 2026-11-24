@@ -50,6 +50,7 @@ audit() {
     install -m 0640 "$AUDIT_EXAMPLES/$f" "/etc/audit/rules.d/$f"
   done
   install -m 0640 audit/50-user-cmd.rules /etc/audit/rules.d/50-user-cmd.rules
+  install -m 0640 audit/55-user-files.rules /etc/audit/rules.d/55-user-files.rules
   install -m 0640 audit/60-persistence.rules /etc/audit/rules.d/60-persistence.rules
   local t; t=$(mktemp)
   audit/account-rules.sh > "$t"

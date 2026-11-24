@@ -5,11 +5,14 @@
 설정: /etc/moa-notify/config.json (root 0600), 예시는 config.example.json
 """
 import argparse
+import base64
+import hashlib
 import json
 import logging
 import os
 import re
 import socket
+import stat
 import sys
 import time
 import urllib.request
@@ -763,7 +766,7 @@ class AuditFiles:
             return []
         sc = e["sc"]
         key, exe, comm = sc["key"], audit_str(sc.get("exe", "")), audit_str(sc.get("comm", ""))
-        if exe in self.skip_exe:
+        if exe in self.skip_exe or sc.get("pid") == str(os.getpid()):   # 자기 읽기(세션 감시가 만든 파일을 읽을 때)
             return []
         names = []
         for p in e["paths"]:
@@ -796,7 +799,133 @@ class AuditFiles:
                  "lines": [f"{exe} {e['title'] or ''}"[:300]]}]
 
 
-WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate, "sshd": SshSessions, "projection": TunnelIn, "audit": AuditFiles}
+class LoginSessions:
+    """auditd 기록에서 sshd 로그인 세션 하나가 한 일을 모아 알린다: 실행한 명령(user-cmd), 만든 파일(user-file — 내용·해시 포함).
+    flush_seconds마다 새로 모인 것만 한 건으로, 세션이 끝나면 마지막 한 건. files_root가 있으면 파일을 그 아래에서 읽는다(꺼낸 디스크 등)"""
+
+    name = "sessions"
+    SKIP_FILES = re.compile(r"^/(?:dev|proc|sys|run/user)/")
+
+    def __init__(self, cfg, host):
+        self.host = host
+        self.flush = float(cfg.get("flush_seconds", 5))
+        self.cap = int(cfg.get("file_max_bytes", 1 << 20))
+        self.settle = float(cfg.get("file_settle_seconds", 2))
+        # 서비스는 PrivateTmp(자기 /tmp·/var/tmp)라 그대로 열면 사용자의 /tmp가 안 보인다 → PID 1의 루트로(11/24 실측)
+        self.root = cfg.get("files_root", "/proc/1/root")
+        self.s = {}     # ses → 세션
+        self.ev = {}    # serial → 사건 조각
+
+    def feed(self, line):
+        m = RE_AUDIT.match(line)
+        if not m:
+            return []
+        t, serial, f = m["type"], m["serial"], audit_fields(m["body"])
+        ts = float(m["ts"])
+        if t in ("USER_START", "USER_END") and f.get("exe") == "/usr/sbin/sshd" and f.get("res", "").startswith("success"):
+            ses = f.get("ses")
+            if t == "USER_START":
+                self.s[ses] = {"ses": ses, "user": f.get("acct"), "addr": f.get("addr"), "start": ts, "end": None,
+                               "cmds": [], "files": [], "pending": {}, "sent": 0, "last": 0.0, "nfiles": 0, "ncmds": 0}
+            elif ses in self.s:
+                self.s[ses]["end"] = ts
+            return []
+        if t == "SYSCALL":
+            if f.get("key") in ("user-cmd", "user-file") and f.get("ses") in self.s:
+                self.ev[serial] = {"ts": ts, "sc": f, "argv": None, "cwd": None, "paths": []}
+            return []
+        e = self.ev.get(serial)
+        if e is None:
+            return []
+        if t == "EXECVE":
+            e["argv"] = [audit_str(f.get(f"a{i}", "")) for i in range(int(f.get("argc", "0")))]
+        elif t == "CWD":
+            e["cwd"] = audit_str(f.get("cwd"))
+        elif t == "PATH":
+            e["paths"].append(f)
+        elif t in ("PROCTITLE", "EOE"):
+            self._take(self.ev.pop(serial))
+        return []
+
+    def _take(self, e):
+        sc = e["sc"]
+        x = self.s.get(sc.get("ses"))
+        if x is None:
+            return
+        if sc["key"] == "user-cmd" and e["argv"]:
+            x["cmds"].append({"ts": e["ts"], "pid": sc.get("pid"), "ppid": sc.get("ppid"), "uid": sc.get("_UID") or sc.get("uid"),
+                              "argv": e["argv"], "cwd": e["cwd"]})
+            x["ncmds"] += 1
+        elif sc["key"] == "user-file" and sc.get("success", "yes") == "yes":
+            for p in e["paths"]:
+                n = audit_str(p.get("name", ""))
+                if not n or p.get("nametype") in ("PARENT", "DELETE") or p.get("mode", "").startswith("04"):
+                    continue
+                if not n.startswith("/") and e["cwd"]:
+                    n = os.path.normpath(os.path.join(e["cwd"], n))
+                if not self.SKIP_FILES.match(n):
+                    x["pending"][n] = (e["ts"], time.monotonic(), sc.get("exe", "").strip('"'))
+
+    def _read(self, path):
+        full = os.path.join(self.root, path.lstrip("/")) if self.root else path
+        try:
+            fd = os.open(full, os.O_RDONLY | getattr(os, "O_NOATIME", 0))
+        except PermissionError:
+            fd = os.open(full, os.O_RDONLY)
+        h, size, head = hashlib.sha256(), 0, b""
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                return {"path": path, "kind": "not-regular"}
+            while True:
+                b = os.read(fd, 1 << 16)
+                if not b:
+                    break
+                h.update(b)
+                if size < self.cap:
+                    head += b[: self.cap - size]
+                size += len(b)
+        finally:
+            os.close(fd)
+        r = {"path": path, "size": size, "sha256": h.hexdigest(), "mode": oct(st.st_mode & 0o7777), "uid": st.st_uid,
+             "mtime": datetime.fromtimestamp(st.st_mtime).astimezone().isoformat(timespec="seconds")}
+        r["content_b64" if size <= self.cap else "head_b64"] = base64.b64encode(head).decode()
+        return r
+
+    def tick(self, force=False):
+        now = time.monotonic()
+        out = []
+        for ses, x in list(self.s.items()):
+            for path, (ts, seen, exe) in list(x["pending"].items()):
+                if force or now - seen >= self.settle or x["end"]:
+                    del x["pending"][path]
+                    try:
+                        r = self._read(path)
+                    except OSError as err:
+                        r = {"path": path, "error": err.strerror}
+                    x["files"].append(dict(r, ts=ts, by=exe))
+                    x["nfiles"] += 1
+            done = x["end"] is not None and not x["pending"]
+            if (x["cmds"] or x["files"]) and (done or force or now - x["last"] >= self.flush) or done:
+                x["last"] = now
+                out.append(self._event(x, done))
+                x["cmds"], x["files"] = [], []
+            if done:
+                del self.s[ses]
+        return out
+
+    def _event(self, x, done):
+        x["sent"] += 1
+        what = f"명령 {len(x['cmds'])}개, 파일 {len(x['files'])}개" + (f" — 세션 끝(전체 명령 {x['ncmds']}개, 파일 {x['nfiles']}개)" if done else "")
+        return {"host": self.host, "source": "세션", "client": x["addr"], "user": x["user"], "database": None, "result": what,
+                "log_ts": datetime.fromtimestamp(x["start"]).astimezone().isoformat(timespec="milliseconds"),
+                "session": {"ses": x["ses"], "part": x["sent"], "end": done,
+                            "commands": [dict(c, ts=datetime.fromtimestamp(c["ts"]).astimezone().isoformat(timespec="milliseconds")) for c in x["cmds"]],
+                            "files": [dict(f, ts=datetime.fromtimestamp(f["ts"]).astimezone().isoformat(timespec="milliseconds")) for f in x["files"]]},
+                "lines": [" ".join(c["argv"])[:200] for c in x["cmds"][-6:]]}
+
+
+WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate, "sshd": SshSessions, "projection": TunnelIn, "audit": AuditFiles, "sessions": LoginSessions}
 
 
 def load_state(path):
