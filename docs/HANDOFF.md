@@ -214,5 +214,6 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - 즉시 경보(사용자: "시중 솔루션을 따르면 그것에 맞게"): moa-notify PG·sshd `immediate` — 접속 첫 줄에서 "접속 시작"(Illusive forensic alert module). 스위치 `forensics`가 `notify-config`로 세 서버 값을 맞춤. 관문을 꺼도 PG 경로 P 특정
 - 포렌식 억제 = 실행 파일 + auid unset(SSM·CloudWatch·**ClamAV 03:17 검사** — 사용자 지적, 실측은 기준선 때)
 - **회귀 수정**: 60ac16f부터 엔진 `run` 작업이 빈 스크립트를 돌리고 성공 처리(쓰기 줄이 주석 안). 11/23 22:44 이후 run 작업(투영·트랩 스위치, decoy-agent 등)은 실제로 안 돌았음 — 11/24 farm-host check 전부 통과로 현재 상태는 정상 확인. 단위 테스트 추가
-- 회귀 결과(scenario.sh): 투영 SSH 인증 실패만 P를 놓침(남은 한계), 나머지 경로 모두 P 특정 0.6~1.3초
+- 회귀 결과(scenario.sh): 처음엔 투영 SSH 인증 실패만 P를 놓침 → 사용자 지적 후 **둘 다 고침**: ① 수집기 사후 복원(감사 execve에서 목적지 주소·이름을 쓴 명령 → 죽은 P·세션) ② 팜 연결 tar-pit(`servers/hosts/farm/tarpit.sh`, relay 출구 SYN+ACK만 2초, `/etc/relay/tarpit.ms`가 있을 때 PostUp, 스위치 `forensics`가 `engine.tarpit_apply`로 켜고 끔, 값 `forensics/config.yml tarpit_ms`). 이제 다섯 경로 모두 P 특정 0.57~0.9초. 대가: 투영 디코이 첫 연결 2.2초(단서 — 진정성 측정 때 비교)
+- features.spec에 forensics 4줄(즉시 경보·팜 지연 있음/없음)
 - 다음: ② 디코이 행동 기록(engagement) → ③ 침투 체인 상관분석(포렌식 사건 + 미끼 whois + 디코이 세션을 한 체인으로, TIME-WAIT만 남은 사건을 같은 서버의 추적 세션 명령과 시각으로 잇기) → ④ 시나리오 1·3 리허설

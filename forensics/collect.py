@@ -299,7 +299,7 @@ def parse_audit(chunk, ses, pend):
         elif typ == "CWD":
             ev["cwd"] = hexarg(kv.get("cwd", ""))
         elif typ == "EOE" or typ == "PROCTITLE":
-            if "argv" in ev and ev.get("ses") == ses:
+            if "argv" in ev and (ev.get("ses") == ses if ses is not None else ev.get("ses") not in (None, "4294967295")):
                 done.append(dict(ev, serial=serial))
             pend.pop(serial, None)
     if len(pend) > 2000:
@@ -376,12 +376,52 @@ def follow(anchor, ses, seconds):
 SHELLS = {"sh", "bash", "dash", "zsh", "ksh", "fish", "ash", "busybox"}
 
 
+def names_for(ip):
+    """Names this host would resolve to ip without asking DNS: /etc/hosts and every account's ssh config Host -> HostName."""
+    names = {ip}
+    for line in (rds("/etc/hosts") or "").splitlines():
+        f = line.split("#")[0].split()
+        if f and f[0] == ip:
+            names.update(f[1:])
+    for _, h in homes():
+        host = []
+        for line in (rds(os.path.join(h, ".ssh", "config")) or "").splitlines():
+            f = line.strip().split()
+            if len(f) >= 2 and f[0].lower() == "host":
+                host = f[1:]
+            elif len(f) >= 2 and f[0].lower() == "hostname" and (f[1] == ip or f[1] in names):
+                names.update(x for x in host if not any(c in x for c in "*?!"))
+    return names
+
+
+def recover(dst, since):
+    """The connection is already gone (fast failure). Look back in the audit log for a login-session command that named the
+    destination (address or a local name for it) since `since` — the latest one is P, and its session is still followable."""
+    names = names_for(dst)
+    try:
+        data = rd("/var/log/audit/audit.log", 8 << 20).decode("utf-8", "replace")
+    except OSError:
+        return None, names
+    pend, hits = {}, []
+    for ev in parse_audit(data, None, pend):
+        ts = float(ev["serial"].split(":")[0])
+        if ts < since or not ev.get("argv"):
+            continue
+        toks = set()
+        for a in ev["argv"][1:]:
+            toks.update(t for t in a.replace("@", " ").replace(":", " ").replace("/", " ").split())
+        if toks & names:
+            hits.append(dict(ev, at=ts))
+    return (hits[-1] if hits else None), names
+
+
 def main():
     a = sys.argv[1:]
     mode = a[0]
     out("self", pid=os.getpid(), ppid=os.getppid(), host=socket.gethostname())
     target, sock = None, None
-    if mode == "sock":
+    recovered = None
+    if mode == "sock":   # sock <ip> <port> <follow_s> [<dst_ip> <lookback_s>]  (lookback on this host's clock — clocks differ)
         ip, port, secs = a[1], int(a[2]), int(a[3])
         want = f"{ip}:{port}"
         own = inode_owners()
@@ -394,6 +434,13 @@ def main():
                     sock["pids"] = pids
                 break
         out("socket", want=want, found=sock)
+        if not target and len(a) > 5:
+            ev, names = recover(a[4], T0 - float(a[5]))
+            out("recover", dst=a[4], names=sorted(names), found=ev)
+            if ev:
+                recovered = ev
+                live = [(p["comm"] not in SHELLS, p["pid"]) for p in (proc(x) for x in all_pids()) if p and (p["ses"] or "") == ev["ses"]]
+                target = min(live)[1] if live else None
     else:   # pid[,ppid...]: the first one still alive (a short command may be gone; its parent shell usually is not)
         secs = int(a[2])
         tried = [int(x) for x in a[1].split(",") if x]
@@ -417,7 +464,9 @@ def main():
             if e.startswith("SSH_CONNECTION="):
                 ssh_conn = ssh_conn or e[15:]
     ses = ((anchor or {}).get("ses") or "").strip()
-    out("target", pid=target, alive=bool(c), chain=c, anchor=anchor and anchor["pid"], ses=ses, ssh_connection=ssh_conn,
+    if recovered and not ses:
+        ses = recovered["ses"]
+    out("target", pid=target, alive=bool(c), chain=c, anchor=anchor and anchor["pid"], ses=ses, ssh_connection=ssh_conn, recovered=recovered,
         latency=round(time.time() - T0, 3))
     own = inode_owners()
     socks = sockets()

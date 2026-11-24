@@ -15,6 +15,8 @@
 | P 활동 기록 | 〃 | P의 로그인 세션이 있으면 그 세션의 감사 execve를 세션이 끝날 때까지(최대 `follow_seconds`), 없으면(웹 프로세스에서 뜬 셸 등) P 셸의 자손을 0.5초마다 |
 | 사건 | 관리 쪽 `out/forensics/<사건>/` | `alert.json`·`collect.jsonl`·`case.json`(+같은 세션의 다른 경보 `merged.jsonl`), 수신기에 `포렌식` 경보 2번(스냅숏, 추적 끝) |
 
+- P가 이미 끝났으면(빠른 실패): 출발지 감사 기록에서 경보 직전에 목적지 주소·이름을 쓴 로그인 세션 명령을 찾아 P·세션 복원
+- 짧은 연결 붙잡기(벤더 tar-pit): 디코이 PG `auth_delay` 3초(공통 설정), 팜 투영 디코이 SYN+ACK 2초(`servers/hosts/farm/tarpit.sh`, 스위치 `forensics`), 디코이 PG·sshd 접속 시작 즉시 경보(moa-notify `immediate`, 스위치 `forensics`)
 - 같은 세션(또는 같은 셸)을 이미 추적 중이면 새 수집은 멈추고 그 사건에 붙인다 — 미끼 열람 → 디코이 접속이 한 사건
 - 읽기는 `O_NOATIME`(증거 파일의 열람 시각을 안 바꿈). 자기 수집이 낸 감사 경보(수집기 pid)는 무시
 - 억제: `config.yml` `audit_skip_exe`(SSM·CloudWatch 에이전트의 주기적 키 파일 읽기 — 11/30 오탐 분석에서 다시)

@@ -8,3 +8,5 @@ audit_skip:
   - {exe: ^/opt/aws/amazon-cloudwatch-agent/, auid: unset}
   - {exe: ^/usr/bin/clamscan$, auid: unset}                 # 매일 03:17 전체 검사 cron — 미끼 파일 내용을 연다(plan-wbs 4절 예상 오탐원, 실측은 기준선 때)
 print_acts: 5                # 콘솔에 사건마다 보여 줄 활동 수(전부는 collect.jsonl)
+recover_lookback: 10          # 연결이 이미 끝났을 때 감사 기록을 거슬러 볼 여유(경보 받은 뒤 지난 시간 + 이 값)
+tarpit_ms: 2000              # 팜 투영 연결 수립 지연(SYN+ACK만). 11/24: 경보→수집기 0.7초, 실패한 ssh 0.28초 → 2초면 연결 중에 도착

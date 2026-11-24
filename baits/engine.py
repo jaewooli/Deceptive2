@@ -663,6 +663,17 @@ def feature_set(r, name, state):
         gate_apply(r)
     elif name == "forensics":
         notify_config()   # 접속 시작 즉시 경보(immediate) 켜고 끄기 — 상관기(forensics/correlate.py)도 스위치를 읽음
+        tarpit_apply(state == "on")
+
+
+def tarpit_apply(on):
+    """Illusive tar-pit(US10382484: 트랩이 들어오는 연결을 일부러 늦춰 출발지 포렌식 시간을 번다) — 팜에서 투영 디코이의 SYN+ACK만 늦춤.
+    11/24 실측: 실패한 ssh 0.28초 < 경보→수집기 0.7초. 값은 forensics/config.yml tarpit_ms. relay가 없으면 파일만(다음 PostUp이 씀)"""
+    ms = int(yaml.safe_load((HERE.parent / "forensics" / "config.yml").read_text())["tarpit_ms"])
+    sc = (f"echo {ms} > /etc/relay/tarpit.ms; chmod 644 /etc/relay/tarpit.ms\n"
+          f"if ip link show relay >/dev/null 2>&1; then /usr/local/lib/relay/tarpit on relay {ms}; fi\n") if on else \
+         ("rm -f /etc/relay/tarpit.ms\nif ip link show relay >/dev/null 2>&1; then /usr/local/lib/relay/tarpit off relay; fi\n")
+    one(dests()["farm"]["host"], [{"kind": "run", "argv": [], "script": sc}])
 
 
 def cmd_feature(a):

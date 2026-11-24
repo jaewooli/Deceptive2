@@ -53,6 +53,20 @@ def env():
         if f.exists():
             name2host[json.loads(f.read_text()).get("hostname", h)] = h
     reg = json.loads((ROOT / "out" / "baits" / "registry.json").read_text())
+    for k, val in v.items():
+        if k.startswith("ip:"):
+            DECOY_NAMES.setdefault(k[3:], val)
+    if not getattr(env, "asked", False):   # 디코이 서버의 hostname(경보 host 필드) — 처음 한 번
+        env.asked = True
+        decoys = yaml.safe_load((ROOT / "out" / "baits" / "inventory.yml").read_text())["all"]["children"].get("decoys", {}).get("hosts", {})
+        for h in decoys:
+            try:
+                n = subprocess.run(paths.transport(h, dest), shell=True, input="hostname\n", capture_output=True, text=True,
+                                   timeout=20).stdout.strip()
+                if n and v.get(f"ip:{h}"):
+                    DECOY_NAMES[n] = v[f"ip:{h}"]
+            except subprocess.TimeoutExpired:
+                pass
     return v, dest, ip2host, name2host, reg
 
 
@@ -104,7 +118,18 @@ def decide(alert, ip2host, name2host):
         return None, None, f"출발 {ip}는 회사 서버가 아님(관리 망·디코이·외부) — 수집 안 함"
     if not port:
         return host, None, "출발 포트 없음(ICMP 등) — 스냅숏만"
-    return host, ["sock", ip, port], "디코이 접속 — 출발 소켓의 주인"
+    return host, ["sock", ip, port, dst_of(alert, ip) or ""], "디코이 접속 — 출발 소켓의 주인(끝났으면 감사 기록에서 복원)"
+
+
+DECOY_NAMES = {}   # 경보의 host(서버 hostname) → 주소. 디코이 hostname은 맥락 수집 대상이 아니라 한 번 물어봄
+
+
+def dst_of(alert, client_ip):
+    """경보가 가리키는 목적지 주소: 결과 글의 주소(투영·트랩) 또는 경보 낸 서버 자신(디코이 PG·SSH)"""
+    for m in ADDR.finditer(alert.get("result") or ""):
+        if m.group(1) != client_ip:
+            return m.group(1)
+    return DECOY_NAMES.get(alert.get("host"))
 
 
 class Cases:
@@ -137,11 +162,13 @@ def post(body, dest):
 
 def summarize(target):
     c = target.get("chain") or []
+    rc = target.get("recovered")
+    pre = f"P(끝남, 감사 기록에서 복원)={' '.join(rc.get('argv') or [])[:100]} pid {rc.get('pid')} 세션 {rc.get('ses')} | " if rc else ""
     if not c:
-        return "P 못 찾음(연결·프로세스가 이미 끝남)"
+        return pre + ("세션도 끝남" if rc else "P 못 찾음(연결·프로세스가 이미 끝남, 감사 기록에도 없음)")
     p = c[0]
     tree = " ← ".join(f"{x['comm']}[{x['pid']}]" for x in c[:6])
-    s = f"P={p['comm']}[{p['pid']}] 사용자 {p['user']} 실행 {' '.join(p['cmd'])[:120]} | {tree}"
+    s = pre + f"{'셸' if rc else 'P'}={p['comm']}[{p['pid']}] 사용자 {p['user']} 실행 {' '.join(p['cmd'])[:120]} | {tree}"
     if target.get("ssh_connection"):
         s += f" | 앞 홉 SSH_CONNECTION={target['ssh_connection']}"
     return s
@@ -162,7 +189,11 @@ def run_case(alert, line_no, host, args, why, v, dest, reg, recv_epoch=None):
         sys.exit("환경 프로필 access.run_py 없음")
     a = list(args or ["pid", "1"])
     secs = str(CONF["follow_seconds"] if args else 0)
-    a = a[:2] + [secs] + a[2:] if a[0] == "pid" else a + [secs]
+    if a[0] == "pid":
+        a = a[:2] + [secs] + a[2:]
+    else:   # sock ip port follow [dst lookback] — lookback = 경보 받은 뒤 지난 시간 + 여유(연결은 경보보다 먼저)
+        dst = a[3] if len(a) > 3 else ""
+        a = a[:3] + [secs] + ([dst, str(round(time.time() - (recv_epoch or time.time()) + CONF.get("recover_lookback", 10), 1))] if dst else [])
     # 인자는 명령줄이 아니라 표준입력으로 — 출발지의 ps에 공격자 자기 pid·포트가 보이면 수집이 들킨다(11/24 공격자 시점 검사)
     cmd = tpl.format(host=shlex.quote(host), root=ROOT, key=dest["access"].get("key", ""))
     code = f"import sys; sys.argv = ['-'] + {a!r}\n".encode() + (Path(__file__).parent / "collect.py").read_bytes()
@@ -183,7 +214,7 @@ def run_case(alert, line_no, host, args, why, v, dest, reg, recv_epoch=None):
                 with CASES.lock:
                     CASES.own.setdefault(host, set()).add(str(rec["pid"]))
             elif k == "target":
-                case["target"] = {kk: rec.get(kk) for kk in ("pid", "alive", "anchor", "ssh_connection", "latency")}
+                case["target"] = {kk: rec.get(kk) for kk in ("pid", "alive", "anchor", "ses", "ssh_connection", "latency", "recovered")}
                 case["p_found_at"] = now()
                 case["alert_to_p_seconds"] = round(time.time() - recv_epoch, 3) if recv_epoch else None   # 수신기 시각(호스트 시계 — VM 시계와 다를 수 있음)
                 case["summary"] = summarize(rec)

@@ -49,6 +49,9 @@ PostUp = iptables -w -n -L DOCKER-USER >/dev/null 2>&1 && for x in "-i %i" "-o %
 # relay-notify가 읽어 경보. 터널과 같이 생기고 같이 사라진다(투영 끔 = 흔적 없음)
 PostUp = nft -f - <<< "table ip proj_watch { chain watch_in { type filter hook forward priority -1; policy accept; iifname \"%i\" ct state new limit rate 20/second log prefix \"PROJ-IN \"; }; }"
 PreDown = nft delete table ip proj_watch 2>/dev/null || true
+# 연결 수립 지연(/etc/relay/tarpit.ms가 있을 때만 — 관리 쪽 스위치): 수집 쪽이 출발지에 도착할 때까지 짧은 연결을 붙잡는다
+PostUp = [ -f /etc/relay/tarpit.ms ] && /usr/local/lib/relay/tarpit on %i "\$(cat /etc/relay/tarpit.ms)" || true
+PreDown = /usr/local/lib/relay/tarpit off %i || true
 # 디코이의 apt 요청 → 시점 고정 미러(relay-mirror, 탭 주소 169.254.31.2:3144). 이웃과 같은 스냅숏만 보임 — 디코이는 자기 unattended-upgrades로 따라감
 PostUp = nft -f - <<< "table ip proj_mirror { chain pre { type nat hook prerouting priority dstnat; policy accept; iifname \"ve-*\" $MATCH dnat to 169.254.31.2:3144; }; }"
 PreDown = nft delete table ip proj_mirror 2>/dev/null || true
@@ -63,6 +66,7 @@ chmod 600 /etc/wireguard/relay.conf
 install -d -m 0755 /usr/local/lib/relay; install -d -m 0700 /etc/relay /var/lib/relay-notify
 install -m 0644 "$HERE/../../detection/moa-notify/moa_notify.py" /usr/local/lib/relay/notify.py
 install -m 0644 "$HERE/guest/mirror.py" /usr/local/lib/relay/mirror.py
+install -m 0755 "$HERE/tarpit.sh" /usr/local/lib/relay/tarpit
 cat > /etc/relay/notify.json <<EOF
 {"hostname": "farm", "webhook_url": "$NOTIFY_URL", "format": "$NOTIFY_FORMAT", "max_per_minute": 30, "poll_seconds": 0.5,
  "state_file": "/var/lib/relay-notify/state.json",

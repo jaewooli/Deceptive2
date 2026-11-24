@@ -26,3 +26,8 @@ app-01 | hasnt | nft list table ip local_fwd{nofeat:trap} | dnat to 169\.254\.20
 # ---- Acalvio 투영(자세한 것은 paths·attacker·inside 명세)
 {sensor} | hasnt | cat /etc/relay/projections{nofeat:projection} | \S | [투영 끔] 센서 투영 목록 비어 있음
 {farm} | hasnt | ip -br link{nofeat:projection} | ^relay | [투영 끔] 팜 relay 터널 없음
+# Illusive 출발지 포렌식(forensics): 관리 쪽 상관기 + 접속 시작 즉시 경보 + 짧은 연결 붙잡기(PG auth_delay는 공통 설정이라 항상, 팜 연결 수립 지연은 스위치)
+db-backup-01 | has | grep -h immediate /etc/moa-notify/config.json{feat:forensics} | "immediate": true | [포렌식 켬] 디코이 접속 시작 즉시 경보
+db-backup-01 | hasnt | grep -h immediate /etc/moa-notify/config.json{nofeat:forensics} | "immediate": true | [포렌식 끔] 즉시 경보 없음
+farm | has | tc qdisc show dev relay{feat:forensics}{feat:projection} | netem | [포렌식 켬] 팜 투영 연결 수립 지연
+farm | hasnt | tc qdisc show dev relay{nofeat:forensics} | netem | [포렌식 끔] 팜 연결 수립 지연 없음
