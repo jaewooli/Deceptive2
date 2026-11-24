@@ -15,6 +15,8 @@ access:
   # 검사 실행기(infra/checks/paths.py)의 접속: 표준입력의 셸 스크립트를 root로. {host} {root} {key}
   run: "{root}/infra/local-vm/lab.sh ssh {host} 'sudo sh -s'"
   run_local: "sudo sh -s"                       # 팜 = WSL2 자신
+  # 출발지 포렌식(forensics/): 표준입력의 파이썬 수집기(인자 포함)를 root로, tty 없이(wtmp·last엔 안 남고 auth.log·감사 로그엔 남음)
+  run_py: "{root}/infra/local-vm/lab.sh ssh {host} 'sudo python3 -'"
   # 투영 디코이 안쪽: 회사 서버(web-01)를 점프 호스트로(관리 키는 호스트에만, 디코이 auth.log에 web-01 출발 로그인이 남음 — 측정 흔적)
   #   점프는 ProxyCommand로 — -J는 점프 호스트에 -o 옵션이 안 먹어 사용자의 ~/.ssh/known_hosts와 부딪힘(11/23, 사용자 파일은 건드리지 않음)
   run_decoy: "ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ProxyCommand='ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 2235 -W %h:%p ubuntu@127.0.0.1' ubuntu@{host} 'sudo sh -s'"

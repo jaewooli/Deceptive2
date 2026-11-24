@@ -506,6 +506,7 @@ FEATURES = {   # 스위치 = 시중 벤더 기술 단위(11/23 사용자: 끄면
     "trap": ("Illusive 트랩 서버 중계(빈 포트 → 팜 트랩 + 활성 트랩만 가리키는 cache_hint, US10404747)", ["decoy_port", "cache_hint"]),
     "conntable": ("Attivo 연결 테이블 미끼(핸드셰이크만 한 연결 + 디코이 페이로드 관문, US10375110)", []),
     "projection": ("Acalvio 투영(센서 → 팜 디코이 VM)", ["projection"]),
+    "forensics": ("Illusive 출발지 포렌식(경보 → 출발 서버의 접속 프로세스 P 특정·활동 기록, US10382484) — 관리 쪽 forensics/correlate.py, 서버엔 흔적 없음", []),
 }
 # 항상 켜 둠(자체 설계 — 특정 벤더 기술이 아님): db-backup-01 옛 백업 서버 디코이, moa-notify, 랩 장치·검사 도구
 

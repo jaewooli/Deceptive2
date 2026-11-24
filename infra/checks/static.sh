@@ -7,7 +7,7 @@ fail=0
 say() { printf "%s %s\n" "$1" "$2"; if [ "$1" = "✗" ]; then fail=1; fi; return 0; }
 
 # 1. 환경 값은 infra/env/에만(docs/local-aws-parity.md 원칙 2): 서버·엔진 코드에 로컬 랩 주소가 박혀 있으면 실패(주석·테스트 제외)
-hits=$(grep -rnE '10\.0\.(2|20|21)\.[0-9]+' servers baits --include='*.sh' --include='*.py' --include='*.service' --include='*-up' --include='*-stop' \
+hits=$(grep -rnE '10\.0\.(2|20|21)\.[0-9]+' servers baits forensics --include='*.sh' --include='*.py' --include='*.service' --include='*-up' --include='*-stop' \
   | grep -v '/tests/' | grep -vE '^[^:]+:[0-9]+:\s*#' | grep -vE '#.*10\.0\.' | grep -vE '^\S+\.py:[0-9]+:\s+(sudo |python3 )' || true)
 [ -z "$hits" ] && say ✓ "환경 주소가 코드에 없음" || { say ✗ "환경 주소가 코드에 박힘:"; echo "$hits" | sed 's/^/    /'; }
 

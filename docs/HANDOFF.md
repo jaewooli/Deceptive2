@@ -202,4 +202,12 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 1. 11/27분 ① 출발지 포렌식(관리 쪽 상관기, 스위치 `forensics`) → ② 디코이 행동 기록(db-backup-01 = moa-notify user-cmd 첨부, 투영 디코이 = 팜이 디스크 읽기 전용 — 일관성 먼저 실측, 스위치 `engagement`) → ③ 침투 체인 상관분석 → ④ 시나리오 1·3 로컬 리허설·기준선 정상 작업 스크립트
 2. 11/28 전 미리: 서울 리전 metal/중첩 지원 인스턴스(C8i·M8i·R8i) 가능 여부, 결정 대기 2개(IAM 사용자 이름 `backup-legacy` 유지 여부, AWS hostname 정하는 법 — 로컬 `lt-decoy`)
 3. 블로그 진행 글(05 22·23절이 글감)
-- 랩 상태: VM 5대 + WSL 팜(디코이 stg-01·dev-01) 켜져 있음. WSL이 재시작되면 `lab.sh up all` + `sudo infra/local-vm/farm-host.sh up`
+- 랩 상태: VM 5대 + WSL 팜(디코이 stg-01·dev-01) 켜져 있음. WSL이 재시작되면 `lab.sh up all` + `infra/local-vm/farm-host.sh up`(sudo 없이 — 안에서 sudo를 부름. `sudo`로 부르면 HOME=/root라 venv를 못 찾음, 11/24)
+
+## 19. 11/24 — 출발지 포렌식(11/27분 ①, Illusive US10382484) 완료
+- 사용자 결정: 범위 = 벤더(P 특정 + P 활동 기록) + 계획 스냅숏 5종 / 미끼 열람(감사) 경보도 그 서버에서 수집 / 로컬 전달 = SSH 표준입력·tty 없음 / tar-pit = 실측 뒤 결정
+- 구현 `forensics/`(README에 구조·공격자 시점 흔적): `correlate.py watch`(관리 쪽, 수신기 따라가기, 스위치 `forensics`), `collect.py`(표준입력, /proc만으로 소켓→P, O_NOATIME), `config.yml`(추적 300초·SSM/CloudWatch 억제), `scenario.sh`(회귀 5경로). 프로필 `access.run_py`(AWS는 11/29 SSM)
+- 실측(학습 로그 11/24 표): P 특정 0.6~1.2초. **짧은 연결(투영 SSH 인증 실패·디코이 PG 실패)은 수집기 도착 전에 끝나 P를 놓침**(TIME-WAIT만 남음). 미끼를 먼저 연 공격자는 세션 추적이 먼저 걸려 이후 명령이 다 기록됨(psql에 미끼 비밀번호까지 — out/는 커밋 안 함)
+- 공격자 시점: ps에 수집 인자(공격자 pid)가 보이던 것 수정 → `python3 -`만. 남는 것: root python3 프로세스(세션 끝까지 ≤300초), auth.log 관리 로그인 + sudo 줄, 감사 로그의 last·who
+- 상관기는 로컬에서 손으로 켬(`python3 forensics/correlate.py watch` — 자동 시작 없음, WSL 원칙)
+- 다음: tar-pit 결정(사용자) → ② 디코이 행동 기록(engagement) → ③ 침투 체인 상관분석(포렌식 사건 + 미끼 whois + 디코이 세션을 한 체인으로, TIME-WAIT만 남은 사건을 같은 서버의 추적 세션 명령과 시각으로 잇기) → ④ 시나리오 1·3 리허설

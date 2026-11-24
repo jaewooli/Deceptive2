@@ -9,6 +9,7 @@ access:
   transport: ssm               # SSM Session Manager(관리 SSH 없음)
   run: ~                       # 11/28: SSM Run Command 래퍼(표준입력 스크립트를 root로)
   run_local: ~
+  run_py: ~                    # 11/29: 출발지 포렌식 — SSM Run Command(AWS-RunShellScript)로 수집기 실행
   run_decoy: ~                 # 투영 디코이 안쪽: 회사 서버에 SSM으로 들어가 그 서버에서 디코이로 ssh
 hosts:
   web-01: {group: company, instance_id: ~}

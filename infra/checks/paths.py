@@ -64,7 +64,7 @@ def variables():
             v.setdefault(f"ip:{h}", d["ip"])
     reg = json.loads((OUT / "registry.json").read_text()) if (OUT / "registry.json").exists() else {"placements": {}}
     feats = reg.get("features", {})
-    for name in ("breadcrumbs", "trap", "conntable", "projection"):   # 벤더 기술 스위치(engine.py FEATURES)
+    for name in ("breadcrumbs", "trap", "conntable", "projection", "forensics"):   # 벤더 기술 스위치(engine.py FEATURES)
         v[f"feat:{name}" if feats.get(name, "on") == "on" else f"nofeat:{name}"] = ""
     for p in reg["placements"].values():
         if p["type"] == "projection" and p["status"] == "active":

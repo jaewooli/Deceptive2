@@ -1,0 +1,8 @@
+# 출발지 포렌식 설정(관리 쪽 — 서버엔 안 올라감). 바꾸면 시나리오 재실행(회귀)
+follow_seconds: 300          # P의 활동을 이어서 기록하는 시간(벤더 "logs activities performed by P")
+sink_url: http://127.0.0.1:9099/   # 포렌식 경보를 보낼 수신기(로컬). AWS는 11/29
+# 감사(미끼 열람) 경보 중 수집하지 않을 실행 파일 — 정상 에이전트의 주기적 읽기(11/23 첫 오탐 실측). 억제 근거는 11/30 오탐 분석에서 다시
+audit_skip_exe:
+  - ^/snap/amazon-ssm-agent/
+  - ^/opt/aws/amazon-cloudwatch-agent/
+print_acts: 5                # 콘솔에 사건마다 보여 줄 활동 수(전부는 collect.jsonl)
