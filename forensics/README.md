@@ -19,11 +19,11 @@
 - 짧은 연결 붙잡기(벤더 tar-pit): 디코이 PG `auth_delay` 3초(공통 설정), 팜 투영 디코이 SYN+ACK 2초(`servers/hosts/farm/tarpit.sh`, 스위치 `forensics`), 디코이 PG·sshd 접속 시작 즉시 경보(moa-notify `immediate`, 스위치 `forensics`)
 - 같은 세션(또는 같은 셸)을 이미 추적 중이면 새 수집은 멈추고 그 사건에 붙인다 — 미끼 열람 → 디코이 접속이 한 사건
 - 읽기는 `O_NOATIME`(증거 파일의 열람 시각을 안 바꿈). 자기 수집이 낸 감사 경보(수집기 pid)는 무시
-- 억제: `config.yml` `audit_skip_exe`(SSM·CloudWatch 에이전트의 주기적 키 파일 읽기 — 11/30 오탐 분석에서 다시)
+- 억제: `config.yml` `audit_skip` = 실행 파일 + auid unset(SSM·CloudWatch 에이전트, ClamAV 03:17 검사 — 로그인 세션에서 돌리면 수집함. 11/30 오탐 분석에서 다시)
 
 ## 실행
 ```
-python3 baits/engine.py feature forensics on|off      # 기술 스위치(서버엔 흔적 없음 — 관리 쪽만)
+python3 baits/engine.py feature forensics on|off      # 기술 스위치: 상관기 + 세 서버 즉시 경보(immediate) + 팜 연결 지연
 python3 forensics/correlate.py watch                    # 수신기 따라가기(로컬: ~/.cache/deceptive2-vm/webhook.jsonl)
 python3 forensics/correlate.py once <수신기 줄 번호>      # 경보 하나로 재현
 python3 forensics/correlate.py show <사건 ID>
