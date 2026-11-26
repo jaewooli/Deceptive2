@@ -104,3 +104,17 @@ python3 -I validation/compare.py $D/lt-decoy.txt $D/lt-app.txt --probe $D/lt-dec
 | D4 audit 규칙 | **0개**(app-01 41) — 커널 audit은 컨테이너별로 안 나뉨 | ❌ 컨테이너 한계 |
 | D2·D3 패키지·서비스 | EC2 이미지 기본(apport·ModemManager·cloud-init·snapd·CloudWatch·SSM 등) 없음, 컨테이너 전용(console-getty) 있음 | ⚠️ 루트파일시스템을 debootstrap 대신 공식 클라우드 이미지 루트 tarball로 만들면 대부분 맞음(에이전트는 일부만 돎) |
 - A·C·F 항목 일부(backup 계정 등)는 db-backup-01 역할 규칙이라 stg-01엔 해당 없음 → 역할별 규칙으로 나눌 것
+
+### 11/26 재측정 — db-backup-01 vs app-01 (engagement·forensics·감사 추가 뒤, AWS 전 기준)
+11/22 보완 2차 뒤 처음 재측정. 자동 층은 **여전히 디코이 전용 단서 0**(S1·S2 공통, E1·E2 바깥 응답 바이트 동일, B7 kvm, S3 공통). 사람 층 "단서" 11개를 원인별로 나눔:
+| 원인 | 항목 | 진짜 단서인가 |
+|---|---|---|
+| **compare.py 역할 한계**(db-backup-01 역할 고정, HANDOFF 4절 6번) | A10·C1·D4·D5·D7·S4 | ✗ — backup 계정·덤프·역할 규칙 차이를 "단서"로 셈. 역할별 규칙 필요 |
+| **측정 오염**(이번 시나리오 리허설이 남긴 라이브 연결) | C4(`10.0.21.11`에서 ESTABLISHED) | ✗ — 측정 중 연결. web-01은 app-01에도 연결(C4 ✓여야) |
+| **로컬 드리프트**(AWS 일괄 구축 땐 사라짐) | D2 커널 147 vs 151, D1·D3 패키지·서비스 | △ — app-01만 11/23 수동 full-upgrade, 디코이 unattended는 안 따라감(HANDOFF 15절 기록된 한계). AWS는 같이 빌드 |
+| **설계대로 허용**(목적지 탐지 장치, 성공 기준 예외) | D6 포트 15432 | ✗ — `127.0.0.1`만 듣는 관문 계열 python(바깥 안 보임) |
+| **[로컬] 호스트 이름·측정 로그** | B1·F4 | ✗ — `lt-decoy` 이름, sudo/auditd가 남긴 줄(11/22 오염 확인) |
+
+- **tar-pit 접속 지연 단서(신규, 실측)**: 투영 디코이(stg) 첫 TCP 접속 **2.22초** vs 진짜 app-01 **0.03초**(web-01에서 3회). 포렌식 P 포착(짧은 연결)의 대가로 팜 relay 출구가 SYN+ACK만 2초 늦추는 설계(11/24, 사용자 승인). **스캐너가 접속 시간을 비교하면 투영 디코이가 드러난다** — 기록된 한계. 그 뒤 패킷은 정상(ping 5~11ms). db-backup-01(팜 밖 진짜 EC2)은 tar-pit 없음 → 영향 없음
+- **AWS 전 결론**: 꼭 고칠 진정성 버그 없음. 깨끗한 역할별 숫자(투영·web-01 포함)는 **compare.py 역할별 규칙(HANDOFF 4절 6번)** 이 있어야 — AWS에서 전 역할을 한 번에(11/29 EC2 재측정)
+- 원자료: `out/validation/2026-11-26/`(커밋 안 함)

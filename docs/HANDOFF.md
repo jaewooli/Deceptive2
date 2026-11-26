@@ -241,3 +241,9 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - 검증: static.sh·`farm-host check`(paths·attacker·inside·lab·features·detect) 전부 통과, 디코이 흔적 되돌림(잔여 0)
 - **안전·한계 기록**: 디코이에 잠깐 쓴 미끼 줄은 시나리오 끝에 제거. 미끼를 안 건드리고 지나가는 공격자는 안 걸림(위생이 디셉션과 경쟁 — 변경 F). detect.py 디코이 SSH 케이스가 시나리오3 직후 디코이 부하로 한 번 60초 초과 → 재실행 1.2초(일시적)
 - **다음**: 11/28 AWS 일괄 구축(HANDOFF 4절 8·9, 시나리오2 CloudTrail 2차, 시나리오3 VPC Traffic Mirroring 결정, hostname 설계). 11/29 EC2 재측정 + 저녁 압축 기준선 시작. 결정 대기: IAM 사용자 이름 `backup-legacy` 유지 여부, AWS hostname(로컬 `lt-decoy`)
+
+### 22a. 11/26 오후 — AWS 전 점검(진정성 재측정 + 서울 리전)
+- **진정성 재측정**(db-backup-01 vs app-01, 11/22 이후 처음 — validation/README 11/26 항목): 자동 층 디코이 전용 단서 **여전히 0**(S1·S2 공통, E1·E2 바이트 동일, B7 kvm). 사람 층 "단서" 11개는 모두 ①compare.py 역할 고정 한계(4절 6번) ②시나리오 라이브 연결(C4) ③로컬 커널 드리프트(D2 147 vs 151 — AWS 일괄 빌드 땐 사라짐) ④설계 허용 장치(D6 15432=127.0.0.1 관문) ⑤[로컬] 이름/측정 오염. **꼭 고칠 진정성 버그 없음**
+- **tar-pit 단서 실측(신규)**: 투영 디코이 첫 접속 **2.22초** vs app-01 0.03초 — 포렌식 P 포착의 대가(사용자 승인 설계), 기록된 한계. db-backup-01은 tar-pit 없음. **사용자 확인 필요**: 이 2.2초를 한계로 둘지(현재) 조정할지
+- **서울 리전(ap-northeast-2) 중첩 가상화**: C8i·M8i·R8i에서 전 리전 지원(2026-02~03 출시, 추가 요금 없음, 시작/정지 상태에서 CPU 옵션 `NestedVirtualization=enabled`). **서울 명시 출처는 못 찾음 → 11/28 콘솔/CLI로 최종 확인.** 성능 민감하면 metal 권장, hibernation 불가. aws.yml `farm.instance_type` 후보 = metal 또는 C8i/M8i/R8i
+- **깨끗한 역할별 진정성 숫자(투영·web-01 포함)는 compare.py 역할별 규칙(4절 6번)이 있어야** — AWS에서 전 역할 한 번에 재측정(11/29)이 효율적. 지금은 역할 규칙을 안 만듦(사용자 결정 대기)
