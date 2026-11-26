@@ -18,6 +18,11 @@ variable "internal_subnet_cidr" {
   type        = string
 }
 
+variable "farm_subnet_cidr" {
+  description = "farm 서브넷 CIDR"
+  type        = string
+}
+
 variable "availability_zone" {
   description = "두 서브넷을 둘 단일 AZ"
   type        = string

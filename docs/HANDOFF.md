@@ -254,4 +254,14 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 2. **AWS hostname = 역할 이름 그대로**(web-01·app-01·db-backup-01·sensor·farm). `lt-*`는 QEMU 랩 아티팩트. 11/28에 ① /etc/hostname ② SSH 호스트 키 주석(`root@<hostname>` — 로컬 `lt-decoy` 였음, 16절) ③ CloudWatch 에이전트 파일의 호스트 이름을 서사 이름으로 맞추고, 호스트 키 주석까지 확인
 3. **시나리오3 VPC Traffic Mirroring = 보류**(핵심 구축엔 안 넣음, 여유 시 보강). 성공 기준 요구 안 함, db-backup-01 engagement는 서버 안 moa-notify sessions로 이미 됨. 디코이 밖 녹화(Attivo BOTsink식)는 열어 둠 — 디코이 전용 흔적 없는 깨끗한 방식이라 나중에 추가 쉬움
 4. **tar-pit 2.22초 = 한계로 유지.** 사용자 승인 설계(11/24), 포렌식 P 포착의 대가. 낮추면 P 포착 신뢰도↓. 투영 디코이 첫 접속만 영향, 이후 정상. 실제 공격자가 접속 시간 비교로 드러낸 사례가 나오면 재검토
+### 22c. 11/26 밤 — Terraform 다시 씀(`infra/terraform/README.md`)
+- 11/21 뼈대 → 지금 설계: farm 서브넷, sensor(관리 ENI) + **투영 ENI 모듈**(주 IP = 투영 주소, 디코이마다 ENI), farm(**중첩 가상화** `cpu_options.nested_virtualization`, metal이면 끔), EDH 트랩 포트 SG, backup-writer 역할(app-01)·backup-legacy 사용자(권한 0, **키는 TF 밖**), 백업 버킷(30일 만료)·운영 버킷(버전), CloudTrail(읽기+쓰기) + EventBridge(`ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS` — 읽기 전용 `sts get-caller-identity`도) + 웹훅(선택)
+- provider 5.100 → **6.74**(중첩 옵션이 6.x에만 — 스키마로 확인), random 3.9.1. `network_interface` 블록 deprecated → `primary_network_interface` + `aws_network_interface_attachment`
+- **기만 관점 수정**: 디코이 SG 이름 `moayeyak-decoy-sg` → `moayeyak-db-backup-sg`(IMDS `meta-data/security-groups`로 디코이 안에서 보였음), `instance_metadata_tags = disabled`, IMDS hop 2(세 서버 같게), `ignore_changes = [ami]`(서버 교체 방지)
+- 검증: fmt·validate, **`terraform test` mock 6개**(팜 중첩/metal, 투영 ENI, 개수·구간 검증, 웹훅) — 테스트가 metal 이름 판정 버그(`m7i.metal-24xl`) 발견·수정. static.sh에 ⑥ Terraform 검사 + ②-3 **AWS 리소스 이름·설명 용어 검사**(변이 시험으로 확인)
+- **plan 못 함**: 로컬 AWS 자격증명 무효(`InvalidClientTokenId`) → 11/28 자격증명 다시 설정 후 plan
+- 투영 주소 두 단계(README): 서버만 apply → engine plan(블렌딩이 주소 결정) → tfvars `projections` → 다시 apply → aws.yml sensor_nics
+- **사용자 결정 대기**: CloudTrail·EventBridge 단일 리전(CLAUDE.md) → 다른 리전·STS 전역 엔드포인트(us-east-1 기록)로 키를 쓰면 경보 없음. 다중 리전 추적 + us-east-1 규칙으로 막을지
+- 한계 기록: S3 객체 시각·IAM 생성일 못 되돌림(서사 2025-09), OS hostname은 SSM 쪽
+
 - **11/28 세션이 바로 할 일(순서)**: 서울 리전 C8i/M8i/R8i 중첩 or metal 콘솔 확인 → Terraform 완성·apply(4절 9번) → aws.yml 값 채움(Terraform 출력) → 미끼 레지스트리 S3·Ansible aws_ssm(4절 8번) → backup-legacy 실제 IAM 키(권한 없음) → 전 역할 공격자 시점·경로·안쪽·탐지 검사 + compare.py 역할 규칙으로 진정성 재측정(4절 6번) → 시나리오1 EC2 리허설. Terraform은 AWS 자격증명이 있어야 apply·검증 가능해 11/28에 함(지금 로컬에선 blind 작성뿐)

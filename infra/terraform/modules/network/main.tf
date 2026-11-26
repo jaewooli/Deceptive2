@@ -44,6 +44,17 @@ resource "aws_subnet" "internal" {
   tags = { Name = "${var.project}-internal" }
 }
 
+# farm — 팜(디코이 VM을 돌리는 KVM 호스트, 11/22 투영). 회사 서버가 아니므로 회사 구간과 다른 서브넷.
+# 회사 망에서 팜으로 직접 오는 길은 없다(보안 그룹: 터널 UDP만). 아웃바운드(SSM·apt·스냅숏 미러)는 internal과 같은 방식.
+resource "aws_subnet" "farm" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = var.farm_subnet_cidr
+  availability_zone       = var.availability_zone
+  map_public_ip_on_launch = true
+
+  tags = { Name = "${var.project}-farm" }
+}
+
 # ---------------------------------------------------------------- 라우팅
 # public: 0.0.0.0/0 -> IGW
 resource "aws_route_table" "public" {
@@ -81,14 +92,32 @@ resource "aws_route_table_association" "internal" {
   route_table_id = aws_route_table.internal.id
 }
 
+# farm: 0.0.0.0/0 -> IGW (같은 no-NAT 방식)
+resource "aws_route_table" "farm" {
+  vpc_id = aws_vpc.this.id
+
+  tags = { Name = "${var.project}-farm-rt" }
+}
+
+resource "aws_route" "farm_internet" {
+  route_table_id         = aws_route_table.farm.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.this.id
+}
+
+resource "aws_route_table_association" "farm" {
+  subnet_id      = aws_subnet.farm.id
+  route_table_id = aws_route_table.farm.id
+}
+
 # ---------------------------------------------------------------- S3 게이트웨이 엔드포인트
 # 무료. app-01 의 pg_dump -> S3 백업이 인터넷을 거치지 않게 한다.
 # 게이트웨이 엔드포인트는 라우트 테이블에 prefix list 라우트를 추가하는 방식 → 두 RT 모두 연결.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.this.id
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  service_name      = "com.amazonaws.${data.aws_region.current.region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.public.id, aws_route_table.internal.id]
+  route_table_ids   = [aws_route_table.public.id, aws_route_table.internal.id, aws_route_table.farm.id]
 
   tags = { Name = "${var.project}-s3-gw" }
 }

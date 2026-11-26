@@ -27,6 +27,14 @@ hits=$(git ls-files servers/detection/moa-notify/moa_notify.py servers/detection
   | xargs grep -nE "$TERMS" 2>/dev/null || true)
 [ -z "$hits" ] && say ✓ "서버에 남는 파일에 프로젝트 용어 없음" || { say ✗ "서버에 남는 파일에 프로젝트 용어:"; echo "$hits" | cut -c1-160 | sed 's/^/    /'; }
 
+# 2-3. AWS 리소스 이름·설명에 프로젝트 용어 금지(11/26): 보안 그룹 이름은 서버 안 IMDS(meta-data/security-groups)에,
+#   인스턴스 프로파일·역할 이름은 iam/info에 보인다 — 예전 디코이 SG `moayeyak-decoy-sg`가 디코이 안에서 "decoy"를 보여 줬음
+#   resource 블록만 본다(variable·output의 description은 개발자 메모 — AWS로 안 감)
+hits=$(find infra/terraform -name '*.tf' -not -path '*/.terraform/*' -print0 | xargs -0 awk '
+  /^resource /{r=1} /^(variable|output|data|module|locals|terraform|provider) /{r=0} /^}/{if(!r)next}
+  r && /^[[:space:]]*(name|description)[[:space:]]*=/ {print FILENAME":"FNR":"$0}' | grep -E "$TERMS" || true)
+[ -z "$hits" ] && say ✓ "AWS 리소스 이름·설명에 프로젝트 용어 없음" || { say ✗ "AWS 리소스 이름·설명에 프로젝트 용어(IMDS로 보일 수 있음):"; echo "$hits" | cut -c1-160 | sed 's/^/    /'; }
+
 # 3. 셸 문법 + (있으면) shellcheck 오류 수준
 for f in $(git ls-files '*.sh' servers/hosts/farm/guest/guest-up); do
   bash -n "$f" 2>/dev/null || say ✗ "문법: $f"
@@ -55,4 +63,12 @@ d = keys(a) ^ keys(b)
 d -= {"access.key", "access.transport", "farm.instance_type"}   # 접속 방식·인스턴스 타입은 환경마다 다른 키
 if d: print("  다른 키:", sorted(d)); sys.exit(1)
 PY
+
+# 6. Terraform(11/26): 형식·문법·mock 테스트(자격증명 없이 plan 동작 — 팜 중첩/metal, 투영 ENI, 검증 규칙). init 안 돼 있으면 건너뜀
+if command -v terraform >/dev/null && [ -d infra/terraform/.terraform ]; then
+  (cd infra/terraform && terraform fmt -check -recursive >/dev/null && terraform validate -no-color >/dev/null) && say ✓ "Terraform fmt·validate" || say ✗ "Terraform fmt·validate"
+  (cd infra/terraform && terraform test -no-color 2>&1 | grep -q '^Success!') && say ✓ "Terraform test(mock)" || say ✗ "Terraform test(mock) — cd infra/terraform && terraform test"
+else
+  say · "Terraform 없음 또는 init 전 — 건너뜀"
+fi
 exit $fail

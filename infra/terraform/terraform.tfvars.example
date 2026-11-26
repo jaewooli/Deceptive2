@@ -1,6 +1,21 @@
 # 이 파일을 복사해 terraform.tfvars 로 쓰고 실제 값을 채운다.
-# terraform.tfvars 는 .gitignore 되어 커밋되지 않는다(개인정보).
+# terraform.tfvars 는 .gitignore 되어 커밋되지 않는다(개인정보·비밀값).
 
 # web-01 80/443 인바운드를 허용할 내 공인 IP (/32)
 # 확인: curl -s https://checkip.amazonaws.com
 admin_ip = "203.0.113.4/32"
+
+# 팜 타입 — 중첩 가상화(C8i·M8i·R8i) 또는 metal. 서울 리전 제공을 콘솔/CLI로 먼저 확인
+# farm_instance_type = "m8i.large"
+
+# AMI 고정(선택). 비우면 처음 apply 때의 Canonical 현재 AMI를 쓰고 이후 교체하지 않음
+# ami_id = "ami-xxxxxxxxxxxxxxxxx"
+
+# backup-legacy 키 사용 경보 웹훅(선택, 비밀값). state에도 남는다
+# alert_webhook_url = "https://discord.com/api/webhooks/..."
+
+# 투영 디코이 — 두 번째 apply 때(README "투영 주소 두 단계"). 주소는 engine.py plan 결과
+# projections = {
+#   "stg-01" = { segment = "public",   ip = "10.0.1.12", device_index = 1 }
+#   "dev-01" = { segment = "internal", ip = "10.0.2.11", device_index = 2 }
+# }
