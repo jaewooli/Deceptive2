@@ -217,3 +217,11 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - 회귀 결과(scenario.sh): 처음엔 투영 SSH 인증 실패만 P를 놓침 → 사용자 지적 후 **둘 다 고침**: ① 수집기 사후 복원(감사 execve에서 목적지 주소·이름을 쓴 명령 → 죽은 P·세션) ② 팜 연결 tar-pit(`servers/hosts/farm/tarpit.sh`, relay 출구 SYN+ACK만 2초, `/etc/relay/tarpit.ms`가 있을 때 PostUp, 스위치 `forensics`가 `engine.tarpit_apply`로 켜고 끔, 값 `forensics/config.yml tarpit_ms`). 이제 다섯 경로 모두 P 특정 0.57~0.9초. 대가: 투영 디코이 첫 연결 2.2초(단서 — 진정성 측정 때 비교)
 - features.spec에 forensics 4줄(즉시 경보·팜 지연 있음/없음)
 - 다음: ② 디코이 행동 기록(engagement) → ③ 침투 체인 상관분석(포렌식 사건 + 미끼 whois + 디코이 세션을 한 체인으로, TIME-WAIT만 남은 사건을 같은 서버의 추적 세션 명령과 시각으로 잇기) → ④ 시나리오 1·3 리허설
+
+## 20. 11/24 밤~11/26 — 디코이 행동 기록(Attivo engagement) 완료 + 감사 규칙 회귀
+- 1단계(11/24, `6663550`): 공통 감사 규칙 `user-file`(로그인 세션이 만든·옮긴 파일, 사용자 위치 + 계정 홈), moa-notify `sessions` 감시(db-backup-01만 켬 — 세션 명령·파일 내용/해시, PrivateTmp 우회 `/proc/1/root`)
+- **회귀(11/26 발견·수정 `b2dd0e3`)**: `55-user-files`가 `60-persistence`보다 먼저 걸려 `/root/.ssh/authorized_keys` 쓰기가 persistence 경보를 안 냄(syscall 규칙은 첫 매치 key만) → `70-user-files`로, 계정 규칙 파일 안에서도 user-file 줄은 맨 뒤. 투영 디코이 `decoy-agent`는 이제 저장소 감사 규칙 전부(50·60·70)를 넣음(전엔 60·61만 → 11/24 규칙이 디코이에 없었음)
+- 2단계(11/26, `673e245`): 팜 relay-notify 새 감시 `guest_sessions` — 투영 연결이 온 디코이만 5초마다 디스크를 `qemu-nbd -s`(임시 층) + 저널 재생 마운트로 읽어 감사 로그를 이어 읽고 LoginSessions로(경보 host = 디코이 이름, `collector: farm:disk`), ve-<이름> pcap(`/var/lib/relay-engage/pcap/<이름>/시간.pcap`, 손님당 512MB). 스위치 = 팜 `/etc/relay/engage`(재시작 없음). 실측·막힌 점은 학습 로그 11/26 두 항목
+- 공격자 시점: 디코이 안 변화 0. 대가 = 지연(세션 끝 뒤 4~14초), 메모리에만 있는 것은 못 봄
+- **사용자 결정 대기**: db-backup-01(팜 밖 진짜 EC2)의 "디코이 밖 트래픽 녹화" = AWS VPC Traffic Mirroring(11/28)을 할지. 서버 안 녹화는 디코이 전용 흔적이라 안 함
+- 다음: ③ 침투 체인 상관분석(포렌식 사건 + 미끼 whois + 디코이 세션 → 한 체인) → ④ 시나리오 1·3 리허설·기준선 정상 작업 스크립트 → 11/28 AWS
