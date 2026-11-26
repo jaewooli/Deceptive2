@@ -224,4 +224,10 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - 2단계(11/26, `673e245`): 팜 relay-notify 새 감시 `guest_sessions` — 투영 연결이 온 디코이만 5초마다 디스크를 `qemu-nbd -s`(임시 층) + 저널 재생 마운트로 읽어 감사 로그를 이어 읽고 LoginSessions로(경보 host = 디코이 이름, `collector: farm:disk`), ve-<이름> pcap(`/var/lib/relay-engage/pcap/<이름>/시간.pcap`, 손님당 512MB). 스위치 = 팜 `/etc/relay/engage`(재시작 없음). 실측·막힌 점은 학습 로그 11/26 두 항목
 - 공격자 시점: 디코이 안 변화 0. 대가 = 지연(세션 끝 뒤 4~14초), 메모리에만 있는 것은 못 봄
 - **사용자 결정 대기**: db-backup-01(팜 밖 진짜 EC2)의 "디코이 밖 트래픽 녹화" = AWS VPC Traffic Mirroring(11/28)을 할지. 서버 안 녹화는 디코이 전용 흔적이라 안 함
-- 다음: ③ 침투 체인 상관분석(포렌식 사건 + 미끼 whois + 디코이 세션 → 한 체인) → ④ 시나리오 1·3 리허설·기준선 정상 작업 스크립트 → 11/28 AWS
+- 다음: ④ 시나리오 1·3 리허설·기준선 정상 작업 스크립트 → 11/28 AWS
+
+## 21. 11/26 — 침투 체인 상관분석(`7fd7a13`) 완료
+- `forensics/chain.py`: 열쇠 = **출발 서버 + 로그인 세션(auditd ses)**. 미끼 열람·출발지 행동은 ses를 알고, 디코이 접촉은 출발 IP:포트만 아니 같은 서버의 최근 체인에 붙이고, 포렌식 사건이 그 소켓 주인 P의 ses를 알려 주면 그 체인으로 옮긴다. 미끼 ID → 털린 위치는 레지스트리(`whois`)로
+- 고친 결함: **출발지 포렌식 수집기 자신**이 사후 복원 중 `~deploy/.ssh/config`를 읽어 "미끼 열람" 경보를 만들고 곁가지 체인이 됨 → `correlate.py`가 수집기 pid를 `out/forensics/collectors.jsonl`에 적고 체인이 거름
+- 남은 한계: 같은 서버에서 몇 초 안에 여러 세션이 디코이를 건드리면 포렌식 없이는 IP만으로 못 가름(학습 로그 11/26)
+- 단위 테스트 5개(`forensics/tests/test_chain.py`), static.sh에 추가
