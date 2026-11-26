@@ -31,3 +31,8 @@ db-backup-01 | has | grep -h immediate /etc/moa-notify/config.json{feat:forensic
 db-backup-01 | hasnt | grep -h immediate /etc/moa-notify/config.json{nofeat:forensics} | "immediate": true | [포렌식 끔] 즉시 경보 없음
 farm | has | tc qdisc show dev relay{feat:forensics}{feat:projection} | netem | [포렌식 켬] 팜 투영 연결 수립 지연
 farm | hasnt | tc qdisc show dev relay{nofeat:forensics} | netem | [포렌식 끔] 팜 연결 수립 지연 없음
+# Attivo 디코이 행동 기록(engagement): db-backup-01 = moa-notify sessions(감사 기록), 투영 디코이 = 팜이 디스크를 임시 층으로 읽음 + ve-* 녹화(11/26)
+db-backup-01 | has | python3 -c "import json;print('sessions', json.load(open('/etc/moa-notify/config.json'))['watch'].get('sessions',{}).get('enabled'))"{feat:engagement} | sessions True | [행동 기록 켬] 디코이 세션 기록
+db-backup-01 | hasnt | python3 -c "import json;print('sessions', json.load(open('/etc/moa-notify/config.json'))['watch'].get('sessions',{}).get('enabled'))"{nofeat:engagement} | sessions True | [행동 기록 끔] 디코이 세션 기록 없음
+farm | has | ls /etc/relay/engage{feat:engagement}{feat:projection} | ^/etc/relay/engage$ | [행동 기록 켬] 팜 투영 디코이 디스크 읽기·녹화
+farm | hasnt | ls /etc/relay/engage 2>/dev/null{nofeat:engagement} | ^/etc/relay/engage$ | [행동 기록 끔] 팜 읽기·녹화 없음

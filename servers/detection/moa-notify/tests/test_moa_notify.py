@@ -165,6 +165,68 @@ class LoginSessionsTest(unittest.TestCase):
         self.assertEqual(w.tick(force=True), [])
 
 
+class GuestSessionsTest(unittest.TestCase):
+    """팜이 손님 디스크(마운트 자리)에서 감사 기록을 이어 읽어 세션을 만든다(11/26) — 마운트는 바꿔 끼움"""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.root = os.path.join(self.d, "root")
+        os.makedirs(os.path.join(self.root, "var/log/audit"))
+        os.makedirs(os.path.join(self.root, "tmp"))
+        self.log = os.path.join(self.root, "var/log/audit/audit.log")
+        Path(self.log).write_text("old line\n")
+
+    def test_read_audit_start_partial_rotate_truncate(self):
+        lines, pos = mn.GuestSessions.read_audit(self.root, None)
+        self.assertEqual(lines, [])   # 처음엔 끝에서
+        with open(self.log, "a") as f:
+            f.write("a\nhalf")
+        lines, pos = mn.GuestSessions.read_audit(self.root, pos)
+        self.assertEqual(lines, ["a"])
+        with open(self.log, "a") as f:
+            f.write("-done\nb\n")
+        os.rename(self.log, self.log + ".1")   # auditd 회전
+        Path(self.log).write_text("c\n")
+        lines, pos = mn.GuestSessions.read_audit(self.root, pos)
+        self.assertEqual(lines, ["half-done", "b", "c"])
+        Path(self.log).write_text("")   # 잘림 → 처음부터
+        lines, pos = mn.GuestSessions.read_audit(self.root, pos)
+        self.assertEqual((lines, pos["off"]), ([], 0))
+        with open(self.log, "a") as f:
+            f.write("d\n")
+        self.assertEqual(mn.GuestSessions.read_audit(self.root, pos)[0], ["d"])
+
+    def test_scan_builds_session_from_disk(self):
+        import shutil
+        shutil.copy(os.path.join(os.path.dirname(__file__), "fixtures", "session-audit.log"), self.log)
+        body = b"#!/bin/sh\necho scan\n"
+        for n in (".x.sh", ".z"):
+            open(os.path.join(self.root, "tmp", n), "wb").write(body)
+        g = mn.GuestSessions({"work_dir": os.path.join(self.d, "w"), "flag": os.path.join(self.d, "flag"),
+                              "guest_env_dir": self.d, "image_dir": self.d, "file_settle_seconds": 0}, "farm")
+        g._mount = lambda n: (self.root, lambda: None)
+        g.offsets["stg-01"] = {"ino": os.stat(self.log).st_ino, "off": 0}
+        g._scan("stg-01")
+        out = g.tick()
+        self.assertEqual(len(out), 1)
+        e = out[0]
+        self.assertEqual((e["host"], e["collector"], e["user"]), ("stg-01", "farm:disk", "backup"))
+        self.assertTrue(e["session"]["end"])
+        self.assertEqual({f["path"] for f in e["session"]["files"]}, {"/tmp/.x.sh", "/tmp/.y", "/tmp/.z"})
+        self.assertEqual(g.offsets["stg-01"]["off"], os.path.getsize(self.log))
+        self.assertTrue(os.path.exists(os.path.join(self.d, "w", "offsets.json")))
+
+    def test_flag_on_resets_position(self):
+        g = mn.GuestSessions({"work_dir": os.path.join(self.d, "w"), "flag": os.path.join(self.d, "flag"),
+                              "guest_env_dir": self.d, "image_dir": self.d}, "farm")
+        g.offsets["x"] = {"ino": 1, "off": 5}
+        g.tick()
+        self.assertEqual(g.offsets, {"x": {"ino": 1, "off": 5}})   # 꺼져 있음
+        Path(os.path.join(self.d, "flag")).write_text("")
+        g.tick()
+        self.assertEqual(g.offsets, {})   # 켜짐: 꺼진 동안 기록은 안 읽음
+
+
 class FollowerTest(unittest.TestCase):
     def test_append_truncate_rotate_and_resume(self):
         with tempfile.TemporaryDirectory() as d:

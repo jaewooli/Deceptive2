@@ -675,8 +675,11 @@ def feature_set(r, name, state):
 
 
 def engage_apply(on):
-    """투영 디코이 쪽: 팜 relay-engage(디스크를 읽어 세션 기록 + ve-* 트래픽 녹화) 켜고 끄기 — 11/24 다음 단계에서 채움"""
-    pass
+    """투영 디코이 쪽(Attivo engagement): 팜 relay-notify의 guest_sessions 감시가 /etc/relay/engage가 있을 때만
+    디코이 디스크를 임시 층으로 읽어 세션을 기록하고 ve-<이름> 트래픽을 pcap으로 녹화(디코이 안 흔적 0, 11/26).
+    파일은 다음 차례(1초 안)에 읽히므로 재시작 없음. 녹화·기록 결과(/var/lib/relay-engage)는 끈 뒤에도 증거로 남김"""
+    sc = "touch /etc/relay/engage; chmod 600 /etc/relay/engage\n" if on else "rm -f /etc/relay/engage\n"
+    one(dests()["farm"]["host"], [{"kind": "run", "argv": [], "script": sc}])
 
 
 def tarpit_apply(on):

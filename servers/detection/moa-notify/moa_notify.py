@@ -925,7 +925,221 @@ class LoginSessions:
                 "lines": [" ".join(c["argv"])[:200] for c in x["cmds"][-6:]]}
 
 
-WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate, "sshd": SshSessions, "projection": TunnelIn, "audit": AuditFiles, "sessions": LoginSessions}
+class GuestSessions:
+    """안쪽 손님 VM 하나하나의 로그인 세션 기록 + 손님 NIC 트래픽 녹화. 손님 안에는 아무것도 더하지 않는다(손님 쪽 흔적 0).
+    - 세션: 손님 디스크를 임시 덮어쓰기 층으로 열어(qemu-nbd -s: 원본은 읽기 전용, 쓰기는 팜의 임시 파일로) 저널을 재생해 마운트하고
+      auditd 기록을 이어 읽어 LoginSessions에 넣는다(명령·만든 파일 내용/해시, files_root = 마운트 자리). 읽고 바로 해제
+      11/26 실측: ro,noload 마운트는 저널에만 있는 inode 크기 변경을 못 봐 audit.log가 몇 분째 옛 크기 → 저널 재생이 필요. 지연 7.5~13초
+    - 언제 읽나: 터널에서 그 손님으로 새 연결(kern.log 접두 prefix)이 온 뒤 active_seconds 동안, 또는 열린 세션이 남아 있는 동안 scan_seconds마다.
+      켜질 때 한 번은 위치만 잡는다(이전 기록을 되풀이하지 않게)
+    - 트래픽: 탭 ve-<이름>을 AF_PACKET으로 pcap 파일에(시간당 한 파일, 손님당 pcap_keep_mb 넘으면 오래된 것부터 지움)
+    - 켜짐 = flag 파일이 있을 때(관리 쪽 스위치). 꺼지면 녹화를 닫고 읽기를 멈춘다"""
+
+    name = "guest_sessions"
+
+    def __init__(self, cfg, host):
+        import queue
+        import threading
+        self.host = host
+        self.prefix = cfg.get("prefix", "PROJ-IN")
+        self.flag = cfg.get("flag", "/etc/relay/engage")
+        self.images = cfg.get("image_dir", "/var/lib/guests")
+        self.every = float(cfg.get("scan_seconds", 5))
+        self.active = float(cfg.get("active_seconds", 900))
+        self.work = cfg.get("work_dir", "/var/lib/relay-engage")
+        self.keep = int(cfg.get("pcap_keep_mb", 512)) << 20
+        self.scfg = {"flush_seconds": cfg.get("flush_seconds", 5), "file_max_bytes": cfg.get("file_max_bytes", 1 << 20),
+                     # 파일 내용은 메타데이터(감사 기록)보다 늦게 디스크에 닿는다(ext4 지연 할당 — 11/26 실측: 같은 차례에 읽으면 크기 0)
+                     # → 손님 writeback 주기(dirty_expire 30초, 실측 대부분 15초 안)를 기다렸다가 다음 차례에 읽음
+                     "file_settle_seconds": cfg.get("file_settle_seconds", 20)}
+        self.names = TunnelIn(dict(cfg, prefix=self.prefix), host)   # 주소 → 이름(guest_env_dir/*.env)
+        self.hot = {}       # 이름 → 마지막 새 연결(monotonic)
+        self.g = {}         # 이름 → {"w": LoginSessions, "pos": {ino, off} | None, "next": monotonic}
+        self.caps = {}      # 이름 → [소켓, 파일, 시각 키]
+        self.q = queue.Queue()
+        self.on = False
+        self.lock = threading.Lock()
+        os.makedirs(self.work, mode=0o700, exist_ok=True)
+        self.state_path = os.path.join(self.work, "offsets.json")
+        self.offsets = load_state(self.state_path)
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    # ---- 터널 새 연결 → 그 손님을 읽기 대상으로
+    def feed(self, line):
+        m = RE_PROJ.match(line)
+        if m and m["prefix"] == self.prefix:
+            self.hot[self.names.guest_name(m["dst"])] = time.monotonic()
+        return []
+
+    def running(self):
+        import glob
+        out = []
+        for f in glob.glob(os.path.join(self.names.env_dir, "*.env")):
+            n = os.path.basename(f)[:-4]
+            if os.path.exists(f"/sys/class/net/ve-{n}") and os.path.exists(os.path.join(self.images, n + ".qcow2")):
+                out.append(n)
+        return sorted(out)
+
+    # ---- 감사 기록 이어 읽기(마운트된 손님 루트 r 아래). 회전(audit.log → .1)도 따라간다
+    @staticmethod
+    def read_audit(r, pos):
+        d = os.path.join(r, "var/log/audit")
+        cur = os.path.join(d, "audit.log")
+        st = os.stat(cur)
+        if pos is None:   # 처음: 끝에서 시작
+            return [], {"ino": st.st_ino, "off": st.st_size}
+        chunks = []
+        if pos["ino"] != st.st_ino:   # 회전됨: 옛 파일의 남은 부분 먼저
+            for i in range(1, 10):
+                p = os.path.join(d, f"audit.log.{i}")
+                try:
+                    if os.stat(p).st_ino == pos["ino"]:
+                        with open(p, "rb") as f:
+                            f.seek(pos["off"])
+                            chunks.append(f.read())
+                        break
+                except FileNotFoundError:
+                    break
+            pos = {"ino": st.st_ino, "off": 0}
+        start = pos["off"] if pos["off"] <= st.st_size else 0   # 줄었으면(잘림) 처음부터
+        with open(cur, "rb") as f:
+            f.seek(start)
+            data = f.read()
+        cut = data.rfind(b"\n") + 1   # 덜 쓴 마지막 줄은 다음에
+        chunks.append(data[:cut])
+        off = start + cut
+        lines = b"".join(chunks).decode("utf-8", "replace").splitlines()
+        return lines, {"ino": st.st_ino, "off": off}
+
+    def _mount(self, n):
+        """손님 디스크 → 임시 층 nbd → 저널 재생 마운트. (마운트 자리, 정리 함수). nbd는 끝 번호부터(guest.sh는 앞 번호부터 씀)"""
+        import subprocess
+        subprocess.run(["modprobe", "nbd", "max_part=16"], check=False)
+        dev = next(f"/dev/nbd{i}" for i in range(15, -1, -1) if open(f"/sys/block/nbd{i}/size").read().strip() == "0")
+        img = os.path.join(self.images, n + ".qcow2")
+        subprocess.run(["qemu-nbd", "-s", "-c", dev, "--image-opts",
+                        f"driver=qcow2,file.driver=file,file.filename={img},file.locking=off"], check=True, timeout=30,
+                       env=dict(os.environ, TMPDIR=self.work))
+        mnt = os.path.join("/run/relay-engage", n)
+        os.makedirs(mnt, exist_ok=True)
+
+        def done():
+            subprocess.run(["umount", mnt], check=False, stderr=subprocess.DEVNULL)
+            subprocess.run(["qemu-nbd", "-d", dev], check=False, stdout=subprocess.DEVNULL)
+        try:
+            for _ in range(50):
+                if os.path.exists(dev + "p1"):
+                    break
+                time.sleep(0.1)
+            subprocess.run(["mount", "-o", "noatime,nodev,nosuid,noexec", dev + "p1", mnt], check=True, timeout=60)
+        except Exception:
+            done()
+            raise
+        return mnt, done
+
+    def _scan(self, n):
+        g = self.g.setdefault(n, {"w": None, "next": 0.0})
+        mnt, done = self._mount(n)
+        try:
+            if g["w"] is None:
+                g["w"] = LoginSessions(dict(self.scfg, files_root=mnt), n)
+            lines, pos = self.read_audit(mnt, self.offsets.get(n))
+            for l in lines:
+                g["w"].feed(l)
+            evs = g["w"].tick()
+        finally:
+            done()
+        with self.lock:
+            self.offsets[n] = pos
+            save_state(self.state_path, self.offsets)
+        for e in evs:
+            e.update(source="세션", collector=f"{self.host}:disk")
+            self.q.put(e)
+
+    def _loop(self):
+        while True:
+            time.sleep(1)
+            if not self.on:
+                continue
+            now = time.monotonic()
+            for n in self.running():
+                g = self.g.get(n)
+                # 열린 세션이 남은 동안(끝 기록을 못 본 세션이 영원히 붙잡지 않게 마지막 새 연결 뒤 하루까지)
+                busy = g is not None and g["w"] is not None and g["w"].s and now - self.hot.get(n, -1e9) < 86400
+                first = n not in self.offsets
+                if not (first or busy or now - self.hot.get(n, -1e9) < self.active) or (g and now < g["next"]):
+                    continue
+                try:
+                    self._scan(n)
+                except Exception as err:   # 읽기 실패는 다음 차례에(손님은 그대로)
+                    log.warning("손님 %s 읽기 실패: %s", n, err)
+                self.g.setdefault(n, {"w": None})["next"] = time.monotonic() + self.every
+
+    # ---- 트래픽 녹화(pcap, 표준 라이브러리)
+    def _capture(self):
+        import struct
+        want = set(self.running()) if self.on else set()
+        for n in list(self.caps):
+            if n not in want:
+                s, f, _ = self.caps.pop(n)
+                s.close()
+                f and f.close()
+        for n in want - set(self.caps):
+            try:
+                s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+                s.setsockopt(socket.SOL_SOCKET, 33, 8 << 20)   # SO_RCVBUFFORCE(root)
+                s.bind((f"ve-{n}", 0))
+                s.setblocking(False)
+                self.caps[n] = [s, None, None]
+            except OSError as err:
+                log.warning("ve-%s 녹화 시작 실패: %s", n, err)
+        for n, c in self.caps.items():
+            while True:
+                try:
+                    pkt = c[0].recv(65536)
+                except (BlockingIOError, InterruptedError):
+                    break
+                except OSError:
+                    break
+                t = time.time()
+                key = time.strftime("%Y%m%d-%H", time.localtime(t))
+                if c[2] != key:
+                    c[1] and c[1].close()
+                    d = os.path.join(self.work, "pcap", n)
+                    os.makedirs(d, mode=0o700, exist_ok=True)
+                    p = os.path.join(d, f"{key}.pcap")
+                    new = not os.path.exists(p)
+                    c[1], c[2] = open(p, "ab"), key
+                    if new:
+                        c[1].write(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 262144, 1))
+                    self._trim(d)
+                c[1].write(struct.pack("<IIII", int(t), int(t % 1 * 1e6), len(pkt), len(pkt)) + pkt)
+            c[1] and c[1].flush()
+
+    def _trim(self, d):
+        fs = sorted((os.path.join(d, x) for x in os.listdir(d)), key=os.path.getmtime)
+        total = sum(os.path.getsize(f) for f in fs)
+        while fs[:-1] and total > self.keep:
+            total -= os.path.getsize(fs[0])
+            os.remove(fs.pop(0))
+
+    def tick(self):
+        on = os.path.exists(self.flag)
+        if on and not self.on:   # 새로 켜짐: 꺼져 있던 동안의 기록은 읽지 않는다(위치를 다시 잡음)
+            with self.lock:
+                self.offsets.clear()
+            self.g.clear()
+        if not on:
+            self.hot.clear()
+        self.on = on
+        self._capture()
+        out = []
+        while not self.q.empty():
+            out.append(self.q.get())
+        return out
+
+
+WATCHERS = {"postgresql": PgConnections, "ports": ForwardedPorts, "gate": PayloadGate, "sshd": SshSessions, "projection": TunnelIn, "audit": AuditFiles, "sessions": LoginSessions, "guest_sessions": GuestSessions}
 
 
 def load_state(path):

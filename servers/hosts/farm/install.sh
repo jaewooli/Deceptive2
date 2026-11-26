@@ -63,14 +63,17 @@ AllowedIPs = 0.0.0.0/0
 EOF
 chmod 600 /etc/wireguard/relay.conf
 # 팜 경보 데몬 — 같은 moa-notify 코드, 투영 감시만. relay와 수명을 같이(Wants·PartOf)
-install -d -m 0755 /usr/local/lib/relay; install -d -m 0700 /etc/relay /var/lib/relay-notify
+install -d -m 0755 /usr/local/lib/relay; install -d -m 0700 /etc/relay /var/lib/relay-notify /var/lib/relay-engage
 install -m 0644 "$HERE/../../detection/moa-notify/moa_notify.py" /usr/local/lib/relay/notify.py
 install -m 0644 "$HERE/guest/mirror.py" /usr/local/lib/relay/mirror.py
 install -m 0755 "$HERE/tarpit.sh" /usr/local/lib/relay/tarpit
 cat > /etc/relay/notify.json <<EOF
 {"hostname": "farm", "webhook_url": "$NOTIFY_URL", "format": "$NOTIFY_FORMAT", "max_per_minute": 30, "poll_seconds": 0.5,
  "state_file": "/var/lib/relay-notify/state.json",
- "watch": {"projection": {"enabled": true, "path": "/var/log/kern.log", "prefix": "PROJ-IN", "guest_env_dir": "/etc/guest"}}}
+ "watch": {"projection": {"enabled": true, "path": "/var/log/kern.log", "prefix": "PROJ-IN", "guest_env_dir": "/etc/guest"},
+           "guest_sessions": {"enabled": true, "path": "/var/log/kern.log", "prefix": "PROJ-IN", "guest_env_dir": "/etc/guest",
+                              "flag": "/etc/relay/engage", "image_dir": "/var/lib/guests", "work_dir": "/var/lib/relay-engage",
+                              "scan_seconds": 5, "active_seconds": 900, "file_settle_seconds": 20, "pcap_keep_mb": 512}}}
 EOF
 chmod 600 /etc/relay/notify.json
 cat > /etc/systemd/system/relay-notify.service <<'EOF'
