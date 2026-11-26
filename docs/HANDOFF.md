@@ -247,3 +247,11 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - **tar-pit 단서 실측(신규)**: 투영 디코이 첫 접속 **2.22초** vs app-01 0.03초 — 포렌식 P 포착의 대가(사용자 승인 설계), 기록된 한계. db-backup-01은 tar-pit 없음. **사용자 확인 필요**: 이 2.2초를 한계로 둘지(현재) 조정할지
 - **서울 리전(ap-northeast-2) 중첩 가상화**: C8i·M8i·R8i에서 전 리전 지원(2026-02~03 출시, 추가 요금 없음, 시작/정지 상태에서 CPU 옵션 `NestedVirtualization=enabled`). **서울 명시 출처는 못 찾음 → 11/28 콘솔/CLI로 최종 확인.** 성능 민감하면 metal 권장, hibernation 불가. aws.yml `farm.instance_type` 후보 = metal 또는 C8i/M8i/R8i
 - **깨끗한 역할별 진정성 숫자(투영·web-01 포함)는 compare.py 역할별 규칙(4절 6번)이 있어야** — AWS에서 전 역할 한 번에 재측정(11/29)이 효율적. 지금은 역할 규칙을 안 만듦(사용자 결정 대기)
+
+### 22b. 11/26 결정(사용자 "그렇게 하자" — 근거 기반 기본값으로 잠금, 되돌릴 수 있음)
+11/28 AWS 구축이 안 막히게 대기 결정 4개를 기본값으로 확정. 틀리면 그때 바꾼다.
+1. **IAM 사용자 이름 `backup-legacy` 유지.** 레지스트리·docs·서사에 이미 엮임, "정리 안 된 옛 사용자"를 이름이 말함(부주의한 관리자가 쓸 법함). 변경 안 함
+2. **AWS hostname = 역할 이름 그대로**(web-01·app-01·db-backup-01·sensor·farm). `lt-*`는 QEMU 랩 아티팩트. 11/28에 ① /etc/hostname ② SSH 호스트 키 주석(`root@<hostname>` — 로컬 `lt-decoy` 였음, 16절) ③ CloudWatch 에이전트 파일의 호스트 이름을 서사 이름으로 맞추고, 호스트 키 주석까지 확인
+3. **시나리오3 VPC Traffic Mirroring = 보류**(핵심 구축엔 안 넣음, 여유 시 보강). 성공 기준 요구 안 함, db-backup-01 engagement는 서버 안 moa-notify sessions로 이미 됨. 디코이 밖 녹화(Attivo BOTsink식)는 열어 둠 — 디코이 전용 흔적 없는 깨끗한 방식이라 나중에 추가 쉬움
+4. **tar-pit 2.22초 = 한계로 유지.** 사용자 승인 설계(11/24), 포렌식 P 포착의 대가. 낮추면 P 포착 신뢰도↓. 투영 디코이 첫 접속만 영향, 이후 정상. 실제 공격자가 접속 시간 비교로 드러낸 사례가 나오면 재검토
+- **11/28 세션이 바로 할 일(순서)**: 서울 리전 C8i/M8i/R8i 중첩 or metal 콘솔 확인 → Terraform 완성·apply(4절 9번) → aws.yml 값 채움(Terraform 출력) → 미끼 레지스트리 S3·Ansible aws_ssm(4절 8번) → backup-legacy 실제 IAM 키(권한 없음) → 전 역할 공격자 시점·경로·안쪽·탐지 검사 + compare.py 역할 규칙으로 진정성 재측정(4절 6번) → 시나리오1 EC2 리허설. Terraform은 AWS 자격증명이 있어야 apply·검증 가능해 11/28에 함(지금 로컬에선 blind 작성뿐)
