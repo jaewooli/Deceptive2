@@ -42,6 +42,7 @@ python3 -m py_compile $(git ls-files '*.py') 2>/dev/null && say ✓ "파이썬 �
 find . -name __pycache__ -not -path './.claude/*' -prune -exec rm -rf {} + 2>/dev/null
 python3 -m unittest discover -s baits/tests -q 2>&1 | tail -1 | grep -q OK && say ✓ "단위 테스트: baits" || say ✗ "단위 테스트: baits"
 (cd servers/detection/moa-notify && python3 -m unittest discover -s tests -q 2>&1 | tail -1 | grep -q OK) && say ✓ "단위 테스트: moa-notify" || say ✗ "단위 테스트: moa-notify"
+python3 -m unittest discover -s forensics/tests -q 2>&1 | tail -1 | grep -q OK && say ✓ "단위 테스트: forensics(체인)" || say ✗ "단위 테스트: forensics(체인)"
 find . -name __pycache__ -not -path './.claude/*' -prune -exec rm -rf {} + 2>/dev/null
 
 # 5. 환경 프로필이 같은 키를 갖는가(로컬에만 있는 값 = AWS에서 빠지는 값)

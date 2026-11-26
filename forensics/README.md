@@ -34,3 +34,10 @@ forensics/scenario.sh                                   # 회귀 시나리오(�
 - `ps`: root `sudo python3 -`·`python3 -`(인자는 표준입력이라 안 보임 — 처음엔 명령줄에 공격자 자기 pid가 보였음), 세션이 끝날 때까지(최대 300초)
 - `last`·`who`: 안 남음(tty 없음). `auth.log`: 관리 계정 로그인 + `sudo ... COMMAND=/usr/bin/python3 -`(adm 그룹·root만 읽음). 감사 로그: 수집기의 `last`·`who` 실행
 - AWS(11/29, plan-wbs 3절 기능 4·변경 E): 전달 = SSM Run Command, 결과 보관 = CloudWatch Logs/S3. SSM은 SSH 로그인 대신 에이전트가 문서 스크립트를 `/var/lib/amazon/ssm/` 아래에 쓴다 — 11/29 전환 때 다시 잰다
+
+## 침투 체인 상관분석 `chain.py`(11/26, 자체 설계 — 스위치 없음, 항상)
+- `python3 -u forensics/chain.py watch`(수신기 따라가기, 새 고리마다 source `체인` 경보) / `build [--last N] [--all]`(다시 만들어 출력). 결과 `out/chains/<ID>.json`
+- 체인 = 미끼 ID → 털린 위치(미끼가 있던 서버·자리) → 디코이 접속 출발 서버 → 사용 계정 → 이후 행동. 고리: 미끼 열람(감사 경로 = 레지스트리 ops 경로) · 디코이 접촉(SSH·PG·터널·트랩·관문, `bait_of`) · 디코이 세션 · 포렌식 사건 · 출발지 행동(같은 로그인 세션의 다른 감사 경보)
+- 묶기: 출발 서버 + 로그인 세션(ses). 세션을 모르는 디코이 접촉은 같은 서버의 최근 체인(`config.yml chain_window_seconds`), 포렌식 사건이 그 접촉의 진짜 세션을 알려 주면 그 체인으로 옮김
+- 거르는 것: 관리 망·외부 출발, 출발지 포렌식 수집기 자신의 감사 경보(`out/forensics/collectors.jsonl` — 수집기가 사후 복원 때 ssh config를 읽어 미끼 열람처럼 보임, 11/26 실측)
+- 리허설(11/26, `scenario.sh` + 상관기 둘): 체인 1개 — web-01(deploy, 세션) · 미끼 T2·T1·cache_hint → 트랩 → 투영 stg-01 → db-backup-01(postgres 추측 → rpt_ro → backup 키 로그인) · 디코이 명령 · 포렌식 사건 3건

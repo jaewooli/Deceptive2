@@ -10,3 +10,4 @@ audit_skip:
 print_acts: 5                # 콘솔에 사건마다 보여 줄 활동 수(전부는 collect.jsonl)
 recover_lookback: 10          # 연결이 이미 끝났을 때 감사 기록을 거슬러 볼 여유(경보 받은 뒤 지난 시간 + 이 값)
 tarpit_ms: 2000              # 팜 투영 연결 수립 지연(SYN+ACK만). 11/24: 경보→수집기 0.7초, 실패한 ssh 0.28초 → 2초면 연결 중에 도착
+chain_window_seconds: 1800       # 침투 체인: 세션을 모르는 경보(디코이 접촉)를 같은 출발 서버의 최근 체인에 붙이는 시간(chain.py)

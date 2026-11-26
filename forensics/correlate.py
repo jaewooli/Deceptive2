@@ -213,6 +213,8 @@ def run_case(alert, line_no, host, args, why, v, dest, reg, recv_epoch=None):
             if k == "self":
                 with CASES.lock:
                     CASES.own.setdefault(host, set()).add(str(rec["pid"]))
+                    with open(OUT / "collectors.jsonl", "a") as cf:   # 체인 상관분석(chain.py)도 수집기 자신의 감사 경보를 거르게
+                        cf.write(json.dumps({"host": host, "pid": str(rec["pid"]), "case": cid, "ts": now()}) + "\n")
             elif k == "target":
                 case["target"] = {kk: rec.get(kk) for kk in ("pid", "alive", "anchor", "ses", "ssh_connection", "latency", "recovered")}
                 case["p_found_at"] = now()
