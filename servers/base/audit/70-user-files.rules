@@ -1,5 +1,6 @@
 ## 로그인 세션이 만든·옮긴 파일(사용자가 쓰는 위치만 — 패키지 설치가 쓰는 /usr·/etc·/var/lib는 제외)
 ## 서비스 프로세스(systemd가 띄운 것)는 auid가 없으므로 남지 않는다. O_CREAT = 0100
+## 이름순 맨 뒤(70): syscall 규칙은 처음 맞는 규칙의 key만 남으므로, 60-persistence·61-account-files(authorized_keys 쓰기 등)가 먼저 걸려야 한다(11/26 회귀 — 55일 때 /root/.ssh/authorized_keys 쓰기가 user-file로만 남음)
 -a always,exit -F arch=b64 -S openat -F a2&0100 -F dir=/home -F auid!=unset -F success=1 -F key=user-file
 -a always,exit -F arch=b64 -S open -F a1&0100 -F dir=/home -F auid!=unset -F success=1 -F key=user-file
 -a always,exit -F arch=b64 -S creat,rename,renameat,renameat2 -F dir=/home -F auid!=unset -F success=1 -F key=user-file

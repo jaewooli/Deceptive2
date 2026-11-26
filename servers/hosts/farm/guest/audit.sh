@@ -6,7 +6,9 @@ set -euo pipefail
 n=${1:?이름}; b=${2:?base 디렉터리}
 R=/var/lib/machines/$n
 findmnt -rno SOURCE "$R" >/dev/null || { echo "$R 가 마운트돼 있지 않음" >&2; exit 2; }
-install -m 0640 "$b/audit/60-persistence.rules" "$R/etc/audit/rules.d/60-persistence.rules"
+# 저장소 규칙 전부(첫 부팅의 base/install.sh 뒤에 바뀐 규칙도 디코이에 닿게 — 11/26: 11/24 user-file 규칙이 디코이에 안 들어가 inside 검사 차이)
+for f in 50-user-cmd.rules 60-persistence.rules 70-user-files.rules; do install -m 0640 "$b/audit/$f" "$R/etc/audit/rules.d/$f"; done
+rm -f "$R/etc/audit/rules.d/55-user-files.rules"
 t=$(mktemp); bash "$b/audit/account-rules.sh" "$R" > "$t"
 install -m 0640 "$t" "$R/etc/audit/rules.d/61-account-files.rules"; rm -f "$t"
 echo "감사 규칙: $n ($(grep -c '^-a' "$R/etc/audit/rules.d/61-account-files.rules")줄)"

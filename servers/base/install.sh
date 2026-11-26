@@ -50,8 +50,9 @@ audit() {
     install -m 0640 "$AUDIT_EXAMPLES/$f" "/etc/audit/rules.d/$f"
   done
   install -m 0640 audit/50-user-cmd.rules /etc/audit/rules.d/50-user-cmd.rules
-  install -m 0640 audit/55-user-files.rules /etc/audit/rules.d/55-user-files.rules
   install -m 0640 audit/60-persistence.rules /etc/audit/rules.d/60-persistence.rules
+  install -m 0640 audit/70-user-files.rules /etc/audit/rules.d/70-user-files.rules
+  rm -f /etc/audit/rules.d/55-user-files.rules   # 11/26 70으로 옮김(규칙 순서)
   local t; t=$(mktemp)
   audit/account-rules.sh > "$t"
   install -m 0640 "$t" /etc/audit/rules.d/61-account-files.rules; rm -f "$t"
