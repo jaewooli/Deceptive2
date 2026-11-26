@@ -231,3 +231,13 @@ infra/local-vm/lab.sh ssh <역할> '명령'   /  run <역할> <디렉터리> <�
 - 고친 결함: **출발지 포렌식 수집기 자신**이 사후 복원 중 `~deploy/.ssh/config`를 읽어 "미끼 열람" 경보를 만들고 곁가지 체인이 됨 → `correlate.py`가 수집기 pid를 `out/forensics/collectors.jsonl`에 적고 체인이 거름
 - 남은 한계: 같은 서버에서 몇 초 안에 여러 세션이 디코이를 건드리면 포렌식 없이는 IP만으로 못 가름(학습 로그 11/26)
 - 단위 테스트 5개(`forensics/tests/test_chain.py`), static.sh에 추가
+
+## 22. 11/26 — 시나리오 1·2·3 로컬 리허설 + 기준선 정상 작업 스크립트 완료
+- **사용자 지시**: "하던 거 마저. 이게 보안적으로 위험하다고 인식되나 봐 — 그 부분만 빼고." → **초기 침투(T1190 웹 RCE)는 재현 안 함**(커버리지 표에서 "탐지 대상 아님(전제)"), **실제 익스플로잇·멀웨어·크리덴셜 덤퍼 안 씀.** 탐지가 보는 관측치만 평범한 명령으로 재현(기존 `forensics/scenario.sh`와 같은 방식)
+- `scenarios/scenario1.sh`(웹침투→횡적이동, P0 핵심)·`scenario2.sh`(backup-legacy 키, 로컬은 호스트 1차만)·`scenario3.sh`(봇 행동 안전 재현)·`run.sh`(상관기 켜고 돌린 뒤 경보 source별 ○/✗ 판정 + `chain.py build`)
+- **시나리오1 결과**: 기대 탐지 8종(감사·포트·sshd·세션·postgresql·터널·포렌식·체인) 모두 ○, **체인 하나로 묶임** — 털린 미끼 env_db_url·cache_hint·ssh_config(@web-01) → 트랩(app-01:6379) → 디코이(backup) → 투영, 계정 backup/rpt_ro, 디코이 명령 9개, 포렌식 사건 다수, 미끼 ID→털린 위치 web-01. 시나리오2 = 감사(backup-legacy 열람) ○. 시나리오3 = engagement 봇 세션(명령 15개·파일 3개) + P0 지속성(디코이 backup authorized_keys 쓰기) ○
+- **고친 것**: ① 시나리오1 ④단계 `ssh`가 heredoc 세션 stdin을 삼켜 ⑥·투영이 안 돌던 것 → `ssh -n`(학습 로그 11/26). ② ld.so.preload·cron.d는 `60-persistence` 규칙만 있고 건드리는 검사가 없어 미검증 → `infra/checks/detect.py`에 안전한 생성·삭제 케이스 2개 추가(이미 있으면 안 건드림). 봇의 루트 지속성 시도는 `sudo -n`으로 즉시 거부(시도만 engagement 기록)
+- **기준선**: `scenarios/baseline/run-app-01.sh [배수]` — app-01.md A1~A14를 "48시간 상당 횟수 × 배수"로, 작업별 시각을 `out/baseline/`에. A9 clamscan·A10 nmap은 `BASELINE_HEAVY=1`일 때만(OOM). **11/29 저녁 실행**, 11/30에 "예상 오탐"과 비교. web-01·db-backup-01 목록은 11/29 확정
+- 검증: static.sh·`farm-host check`(paths·attacker·inside·lab·features·detect) 전부 통과, 디코이 흔적 되돌림(잔여 0)
+- **안전·한계 기록**: 디코이에 잠깐 쓴 미끼 줄은 시나리오 끝에 제거. 미끼를 안 건드리고 지나가는 공격자는 안 걸림(위생이 디셉션과 경쟁 — 변경 F). detect.py 디코이 SSH 케이스가 시나리오3 직후 디코이 부하로 한 번 60초 초과 → 재실행 1.2초(일시적)
+- **다음**: 11/28 AWS 일괄 구축(HANDOFF 4절 8·9, 시나리오2 CloudTrail 2차, 시나리오3 VPC Traffic Mirroring 결정, hostname 설계). 11/29 EC2 재측정 + 저녁 압축 기준선 시작. 결정 대기: IAM 사용자 이름 `backup-legacy` 유지 여부, AWS hostname(로컬 `lt-decoy`)

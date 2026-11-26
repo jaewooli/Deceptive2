@@ -39,6 +39,14 @@ CASES = [
     ("지속성 authorized_keys(app-01)", None, "app-01",
      "f=/root/.ssh/authorized_keys; s=$(stat -c %s $f); m=$(stat -c %y $f); echo >> $f; truncate -s $s $f; touch -d \"$m\" $f",
      {"source": "감사", "result": "/root/.ssh/authorized_keys"}),
+    # ld.so.preload·cron.d는 규칙(60-persistence)만 있고 건드리는 검사가 없었음(11/26) — 봇 지속성(시나리오3) 경로.
+    # 이미 있으면 건드리지 않는다(진짜 ld.so.preload 손상 방지). 빈 파일은 중간에 멈춰도 무해.
+    ("지속성 ld.so.preload(app-01)", None, "app-01",
+     "f=/etc/ld.so.preload; if test -e $f; then echo 'SKIP:이미 있음'; else :>$f; rm -f $f; fi",
+     {"source": "감사", "result": "/etc/ld.so.preload"}),
+    ("지속성 cron.d(app-01)", None, "app-01",
+     "d=/etc/cron.d; f=$d/.probe-$$; md=$(stat -c %y $d); :>$f; rm -f $f; touch -d \"$md\" $d",
+     {"source": "감사", "result": "cron.d"}),
     ("트랩 app-01 빈 포트", "trap", "web-01", "timeout 3 bash -c 'exec 3<>/dev/tcp/{ip:app-01}/{trap:app-01:port}; printf \"PING\\r\\n\" >&3; head -c5 <&3'",
      {"source": "포트", "client": "{ip:web-01}"}),
 ]
